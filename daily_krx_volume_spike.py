@@ -14,20 +14,62 @@ import pandas as pd
 
 KST = dt.timezone(dt.timedelta(hours=9))
 
+import html
+
+TG_MAX = 4096
+
 def tg_send(text: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    body = parse.urlencode(data).encode("utf-8")
-    req = request.Request(url, data=body, method="POST")
-    with request.urlopen(req, timeout=30) as resp:
-        js = json.loads(resp.read().decode("utf-8"))
-        if not js.get("ok"):
-            raise RuntimeError(f"Telegram API error: {js}")
+    # HTML 파싱 오류 방지: 우리가 넣은 태그(<b> 등)만 남기고, 데이터 부분은 escape
+    # -> 방향: 본문 전체를 escape 하고, 우리가 의도한 태그만 나중에 넣는 방식이 가장 안전하지만
+    # 현 구조에선 '데이터 부분'만 escape 해주는 게 현실적입니다.
+    # 간단 방안: 일단 길이만 자르고, 전송 실패 시 parse_mode 비활성화 재시도
+
+    def _post(msg: str, parse_html: bool = True):
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {
+            "chat_id": CHAT_ID,
+            "text": msg,
+            "disable_web_page_preview": True,
+        }
+        if parse_html:
+            data["parse_mode"] = "HTML"
+        body = parse.urlencode(data).encode("utf-8")
+        req = request.Request(url, data=body, method="POST")
+        try:
+            with request.urlopen(req, timeout=30) as resp:
+                js = json.loads(resp.read().decode("utf-8"))
+                if not js.get("ok"):
+                    raise RuntimeError(f"Telegram API error: {js}")
+        except Exception as e:
+            # 응답 본문을 최대한 추출해 원인 파악
+            try:
+                if hasattr(e, "read"):
+                    desc = e.read().decode("utf-8", "ignore")
+                else:
+                    desc = str(e)
+            except Exception:
+                desc = str(e)
+            raise RuntimeError(f"Telegram sendMessage failed: {desc}") from e
+
+    # 4096자 분할 전송
+    if len(text) <= TG_MAX:
+        try:
+            _post(text, parse_html=True)
+        except RuntimeError as e:
+            # HTML 파싱 에러 등일 수 있으니 parse_mode 없이 재시도
+            _post(text, parse_html=False)
+        return
+
+    # 길면 조각내기
+    i = 0
+    while i < len(text):
+        chunk = text[i:i+TG_MAX]
+        try:
+            _post(chunk, parse_html=True)
+        except RuntimeError:
+            _post(chunk, parse_html=False)
+        i += TG_MAX
+
 
 def yyyymmdd(d: dt.date) -> str:
     return d.strftime("%Y%m%d")
