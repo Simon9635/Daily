@@ -3,7 +3,7 @@ name: Telegram Daily 7am KST (KRX Volume Spike)
 on:
   schedule:
     # 일~목 22:00(UTC) = 월~금 07:00(KST)
-    - cron: "0 22 * * 0-4"   # 또는 "0 22 * * SUN-THU"
+    - cron: "17 21 * * 0-4"  
   workflow_dispatch: {}
 
 jobs:
