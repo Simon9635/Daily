@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+import html
 import datetime as dt
 from urllib import request, parse
 
@@ -13,17 +14,11 @@ from pykrx import stock
 import pandas as pd
 
 KST = dt.timezone(dt.timedelta(hours=9))
-
-import html
-
 TG_MAX = 4096
 
+# ---------- Telegram ----------
 def tg_send(text: str):
-    # HTML 파싱 오류 방지: 우리가 넣은 태그(<b> 등)만 남기고, 데이터 부분은 escape
-    # -> 방향: 본문 전체를 escape 하고, 우리가 의도한 태그만 나중에 넣는 방식이 가장 안전하지만
-    # 현 구조에선 '데이터 부분'만 escape 해주는 게 현실적입니다.
-    # 간단 방안: 일단 길이만 자르고, 전송 실패 시 parse_mode 비활성화 재시도
-
+    """HTML 파싱 이슈/길이 초과를 방어하며 전송"""
     def _post(msg: str, parse_html: bool = True):
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {
@@ -41,26 +36,19 @@ def tg_send(text: str):
                 if not js.get("ok"):
                     raise RuntimeError(f"Telegram API error: {js}")
         except Exception as e:
-            # 응답 본문을 최대한 추출해 원인 파악
             try:
-                if hasattr(e, "read"):
-                    desc = e.read().decode("utf-8", "ignore")
-                else:
-                    desc = str(e)
+                desc = e.read().decode("utf-8", "ignore") if hasattr(e, "read") else str(e)
             except Exception:
                 desc = str(e)
             raise RuntimeError(f"Telegram sendMessage failed: {desc}") from e
 
-    # 4096자 분할 전송
     if len(text) <= TG_MAX:
         try:
             _post(text, parse_html=True)
-        except RuntimeError as e:
-            # HTML 파싱 에러 등일 수 있으니 parse_mode 없이 재시도
+        except RuntimeError:
             _post(text, parse_html=False)
         return
 
-    # 길면 조각내기
     i = 0
     while i < len(text):
         chunk = text[i:i+TG_MAX]
@@ -70,15 +58,8 @@ def tg_send(text: str):
             _post(chunk, parse_html=False)
         i += TG_MAX
 
-
-def yyyymmdd(d: dt.date) -> str:
-    return d.strftime("%Y%m%d")
-
-def yyyy_mm_dd(d: dt.date) -> str:
-    return d.strftime("%Y-%m-%d")
-
+# ---------- Date picking (평일만 / 월=금↔목, 화=월↔금) ----------
 def _prev_weekday(d: dt.date) -> dt.date:
-    """캘린더 상 하루 전에서 주말을 건너뛰어 '직전 평일'을 반환."""
     d -= dt.timedelta(days=1)
     while d.weekday() >= 5:  # Sat=5, Sun=6
         d -= dt.timedelta(days=1)
@@ -95,30 +76,33 @@ def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
     주말이면 (None, None)
     """
     wd = now_kst.weekday()  # Mon=0 ... Sun=6
-    if wd >= 5:  # 주말
+    if wd >= 5:
         return None, None
-
     today = now_kst.date()
-
     if wd == 0:  # Mon
         d1 = today - dt.timedelta(days=3)  # Fri
         d0 = today - dt.timedelta(days=4)  # Thu
-    else:
-        # d1: 직전 평일
+    elif wd == 1:  # Tue
+        d1 = today - dt.timedelta(days=1)  # Mon
+        d0 = today - dt.timedelta(days=4)  # Fri
+    else:  # Wed~Fri
         d1 = _prev_weekday(today)
-        # d0: d1의 직전 평일
         d0 = _prev_weekday(d1)
-
     return d1, d0
 
+def yyyymmdd(d: dt.date) -> str:
+    return d.strftime("%Y%m%d")
+
+def yyyy_mm_dd(d: dt.date) -> str:
+    return d.strftime("%Y-%m-%d")
+
+# ---------- Data pulls ----------
 def get_volume_by_market(datestr: str, market: str) -> pd.DataFrame:
-    """
-    해당일/시장 티커별 거래량 데이터프레임 (숫자형 강제)
-    """
+    """해당일/시장 티커별 거래량"""
     df = stock.get_market_ohlcv_by_ticker(datestr, market=market)
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=["티커", "거래량", "시장"])
-    df = df.reset_index()  # index에 티커가 들어오는 pykrx 포맷 방지
+    df = df.reset_index()
     vol_col = "거래량" if "거래량" in df.columns else next((c for c in df.columns if "량" in c), None)
     if not vol_col:
         return pd.DataFrame(columns=["티커", "거래량", "시장"])
@@ -130,45 +114,66 @@ def get_volume_by_market(datestr: str, market: str) -> pd.DataFrame:
     out["시장"] = market
     return out
 
+def get_mcap_by_market(datestr: str, market: str) -> pd.DataFrame:
+    """해당일/시장 티커별 시가총액"""
+    df = stock.get_market_cap_by_ticker(datestr, market=market)
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=["티커", "시가총액"])
+    df = df.reset_index()
+    cap_col = "시가총액" if "시가총액" in df.columns else next((c for c in df.columns if "총액" in c), None)
+    if not cap_col:
+        return pd.DataFrame(columns=["티커", "시가총액"])
+    out = df[["티커", cap_col]].copy()
+    out.rename(columns={cap_col: "시가총액"}, inplace=True)
+    out["시가총액"] = pd.to_numeric(out["시가총액"], errors="coerce")
+    out.dropna(subset=["시가총액"], inplace=True)
+    return out
+
 def safe_int(n):
     try:
         return int(n)
     except Exception:
         return 0
 
+# ---------- Build & send ----------
 def build_report():
     now = dt.datetime.now(KST)
 
-    # 1) 주말 스킵 + 비교일 선택
+    # 평일만 / 비교일 결정
     d1_date, d0_date = pick_compare_days(now)
     if d1_date is None:
-        # 주말: 전송하지 않음 (조용히 종료)
-        return None
+        return None  # 주말: 스킵
 
-    # 2) 비교일 문자열
     d1_str, d0_str = yyyymmdd(d1_date), yyyymmdd(d0_date)
 
-    # 3) 두 시장 데이터 수집
-    frames_d1, frames_d0 = [], []
+    # 거래량: 전일(d1), 전전일(d0) 수집 (KOSPI+KOSDAQ)
+    vols_d1, vols_d0, caps_d1 = [], [], []
     for mkt in ["KOSPI", "KOSDAQ"]:
-        frames_d1.append(get_volume_by_market(d1_str, mkt))
-        frames_d0.append(get_volume_by_market(d0_str, mkt))
-    vol1 = pd.concat(frames_d1, ignore_index=True) if frames_d1 else pd.DataFrame(columns=["티커","거래량","시장"])
-    vol0 = pd.concat(frames_d0, ignore_index=True) if frames_d0 else pd.DataFrame(columns=["티커","거래량","시장"])
+        vols_d1.append(get_volume_by_market(d1_str, mkt))
+        vols_d0.append(get_volume_by_market(d0_str, mkt))
+        caps_d1.append(get_mcap_by_market(d1_str, mkt))  # 정렬용 시총은 '전일' 기준
 
-    # 4) 병합 및 계산
+    vol1 = pd.concat(vols_d1, ignore_index=True) if vols_d1 else pd.DataFrame(columns=["티커","거래량","시장"])
+    vol0 = pd.concat(vols_d0, ignore_index=True) if vols_d0 else pd.DataFrame(columns=["티커","거래량","시장"])
+    mcap = pd.concat(caps_d1, ignore_index=True) if caps_d1 else pd.DataFrame(columns=["티커","시가총액"])
+
+    # 병합 및 필터
     merged = pd.merge(vol1, vol0, on=["티커"], how="inner", suffixes=("_전일", "_전전일"))
-    merged["시장"] = merged["시장_전일"] if "시장_전일" in merged.columns else merged.get("시장", "KRX")
-
     for col in ["거래량_전일", "거래량_전전일"]:
         merged[col] = pd.to_numeric(merged[col], errors="coerce")
     merged = merged.dropna(subset=["거래량_전일", "거래량_전전일"])
     merged = merged[merged["거래량_전전일"] > 0]
-
     merged["배수"] = (merged["거래량_전일"] / merged["거래량_전전일"]).round(2)
+
+    # 5배 이상
     result = merged[merged["배수"] >= 5].copy()
 
-    # 5) 종목명 매핑
+    # 시가총액 붙이고(전일 기준), 내림차순 정렬
+    result = pd.merge(result, mcap, on="티커", how="left")
+    result["시가총액"] = pd.to_numeric(result["시가총액"], errors="coerce").fillna(0)
+    result.sort_values(by=["시가총액", "거래량_전일"], ascending=[False, False], inplace=True)
+
+    # 종목명 매핑
     name_map = {}
     for t in result["티커"].tolist():
         try:
@@ -177,42 +182,34 @@ def build_report():
             name_map[t] = ""
     result["종목명"] = result["티커"].map(name_map)
 
-    result.sort_values(by=["배수", "거래량_전일"], ascending=[False, False], inplace=True)
-
-    # 6) 메시지 구성
+    # 메시지(요청 포맷: "종목명", "전일거래량"만)
     header = (
-        f"<b>[KOSPI/KOSDAQ 거래량 급증 리스트]</b>\n"
-        f"기준: {yyyy_mm_dd(d1_date)}(전일) vs {yyyy_mm_dd(d0_date)}(전전일)\n"
-        f"조건: 전일 거래량 ≥ 전전일의 <b>5배</b>\n"
-        f"전송일: {now.strftime('%Y-%m-%d %a %H:%M KST')}\n"
-        f"(주말 미전송, 월요일은 금↔목 비교)\n"
+        f"<b>[거래량 급증(≥5배) – 시총 내림차순]</b>\n"
+        f"기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}\n"
+        f"전송: {now.strftime('%Y-%m-%d %a 07:00 KST')}\n"
+        f"(월=금↔목, 화=월↔금; 주말 미전송)\n"
     )
 
     if len(result) == 0:
         return header + "\n해당 없음."
 
-    lines, MAX_LINES = [], 80
+    lines, MAX_LINES = [], 120  # 필요시 조절
     for i, row in enumerate(result.itertuples(index=False), start=1):
         if i > MAX_LINES:
             lines.append(f"... (외 {len(result) - MAX_LINES}종 더 있음)")
             break
-        v1 = safe_int(row.거래량_전일)
-        v0 = safe_int(row.거래량_전전일)
-        lines.append(
-            f"{i}. {row.티커} {row.종목명 or ''} ({row.시장}) "
-            f"{row.배수}x  {v1:,} vs {v0:,}"
-        )
+        name = html.escape(row.종목명 or row.티커)  # 종목명 없으면 티커 대체
+        v1 = f"{safe_int(row.거래량_전일):,}"
+        # 포맷: 종목명, 전일거래량
+        lines.append(f"{name}, {v1}")
+
     return header + "\n" + "\n".join(lines)
 
 if __name__ == "__main__":
     try:
         msg = build_report()
-        if msg is not None:  # 주말이면 전송 안 함
+        if msg is not None:
             tg_send(msg)
-        else:
-            # 조용히 종료(로그만 남기고 싶으면 아래 한 줄 주석 해제)
-            # tg_send("주말이므로 보고 스킵합니다.")
-            pass
     except Exception as e:
         try:
             tg_send(f"⚠️ 자동화 에러: {e}")
