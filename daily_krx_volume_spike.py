@@ -77,25 +77,38 @@ def yyyymmdd(d: dt.date) -> str:
 def yyyy_mm_dd(d: dt.date) -> str:
     return d.strftime("%Y-%m-%d")
 
+def _prev_weekday(d: dt.date) -> dt.date:
+    """캘린더 상 하루 전에서 주말을 건너뛰어 '직전 평일'을 반환."""
+    d -= dt.timedelta(days=1)
+    while d.weekday() >= 5:  # Sat=5, Sun=6
+        d -= dt.timedelta(days=1)
+    return d
+
 def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
     """
     평일만 전송:
-      - 월요일: (금요일, 목요일)
-      - 화~금: (전일, 전전일)
-    주말이면 None 리턴 -> 전송 스킵
-    * 공휴일은 별도 고려하지 않습니다(요청사항 충족 관점).
+      - Mon: (Fri, Thu)
+      - Tue: (Mon, Fri)
+      - Wed: (Tue, Mon)
+      - Thu: (Wed, Tue)
+      - Fri: (Thu, Wed)
+    주말이면 (None, None)
     """
     wd = now_kst.weekday()  # Mon=0 ... Sun=6
-    if wd in (5, 6):  # Sat, Sun
+    if wd >= 5:  # 주말
         return None, None
 
     today = now_kst.date()
-    if wd == 0:  # Monday
-        d1 = today - dt.timedelta(days=3)  # Friday
-        d0 = today - dt.timedelta(days=4)  # Thursday
-    else:  # Tue~Fri
-        d1 = today - dt.timedelta(days=1)  # yesterday
-        d0 = today - dt.timedelta(days=2)  # day before yesterday
+
+    if wd == 0:  # Mon
+        d1 = today - dt.timedelta(days=3)  # Fri
+        d0 = today - dt.timedelta(days=4)  # Thu
+    else:
+        # d1: 직전 평일
+        d1 = _prev_weekday(today)
+        # d0: d1의 직전 평일
+        d0 = _prev_weekday(d1)
+
     return d1, d0
 
 def get_volume_by_market(datestr: str, market: str) -> pd.DataFrame:
