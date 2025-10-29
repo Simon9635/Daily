@@ -139,7 +139,7 @@ def safe_int(n):
 def build_report():
     now = dt.datetime.now(KST)
 
-    # 평일만 / 비교일 결정
+    # 평일만 / 비교일 결정 (월=금↔목, 화=월↔금, 수~금=직전 평일 연속 2일)
     d1_date, d0_date = pick_compare_days(now)
     if d1_date is None:
         return None  # 주말: 스킵
@@ -168,10 +168,11 @@ def build_report():
     # 5배 이상
     result = merged[merged["배수"] >= 5].copy()
 
-    # 시가총액 붙이고(전일 기준), 내림차순 정렬
+    # 시가총액 붙이고(전일 기준), 내림차순 정렬 → 상위 30개만
     result = pd.merge(result, mcap, on="티커", how="left")
     result["시가총액"] = pd.to_numeric(result["시가총액"], errors="coerce").fillna(0)
     result.sort_values(by=["시가총액", "거래량_전일"], ascending=[False, False], inplace=True)
+    result = result.head(30).reset_index(drop=True)  # ✅ 상위 30개 제한
 
     # 종목명 매핑
     name_map = {}
@@ -182,26 +183,21 @@ def build_report():
             name_map[t] = ""
     result["종목명"] = result["티커"].map(name_map)
 
-    # 메시지(요청 포맷: "종목명", "전일거래량"만)
+    # 메시지(요청 포맷: "번호) 종목명, 전일거래량"만)
     header = (
-        f"<b>[거래량 급증(≥5배) – 시총 내림차순]</b>\n"
+        f"<b>[거래량 급증(≥5배) – 시총 상위 30개]</b>\n"
         f"기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}\n"
-        f"전송: {now.strftime('%Y-%m-%d %a 07:00 KST')}\n"
         f"(월=금↔목, 화=월↔금; 주말 미전송)\n"
     )
 
     if len(result) == 0:
         return header + "\n해당 없음."
 
-    lines, MAX_LINES = [], 120  # 필요시 조절
+    lines = []
     for i, row in enumerate(result.itertuples(index=False), start=1):
-        if i > MAX_LINES:
-            lines.append(f"... (외 {len(result) - MAX_LINES}종 더 있음)")
-            break
-        name = html.escape(row.종목명 or row.티커)  # 종목명 없으면 티커 대체
-        v1 = f"{safe_int(row.거래량_전일):,}"
-        # 포맷: 종목명, 전일거래량
-        lines.append(f"{name}, {v1}")
+        name = html.escape(row.종목명 or row.티커)
+        v1 = f"{int(row.거래량_전일):,}"
+        lines.append(f"{i}) {name}, {v1}")  # ✅ 번호 형식과 필드 구성
 
     return header + "\n" + "\n".join(lines)
 
