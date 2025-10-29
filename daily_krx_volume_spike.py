@@ -172,7 +172,7 @@ def build_report():
     result = pd.merge(result, mcap, on="티커", how="left")
     result["시가총액"] = pd.to_numeric(result["시가총액"], errors="coerce").fillna(0)
     result.sort_values(by=["시가총액", "거래량_전일"], ascending=[False, False], inplace=True)
-    result = result.head(30).reset_index(drop=True)  # ✅ 상위 30개 제한
+    result = result.head(30).reset_index(drop=True)
 
     # 종목명 매핑
     name_map = {}
@@ -183,23 +183,43 @@ def build_report():
             name_map[t] = ""
     result["종목명"] = result["티커"].map(name_map)
 
-    # 메시지(요청 포맷: "번호) 종목명, 전일거래량"만)
+    # ===== 메시지 구성 =====
     header = (
         f"<b>[거래량 급증(≥5배) – 시총 상위 30개]</b>\n"
         f"기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}\n"
         f"(월=금↔목, 화=월↔금; 주말 미전송)\n"
+        f"\n"
+        f"종목명, 전일거래량\n"  # ← 요청하신 윗 줄 문구
     )
 
     if len(result) == 0:
-        return header + "\n해당 없음."
+        return header + "해당 없음."
 
+    # 표 정렬을 위한 너비 계산 (단순 문자 수 기준)
+    # *CJK 폭은 폰트에 따라 달라 약간의 오차가 있을 수 있습니다(텔레그램 monospace에서 대부분 충분히 정렬됨).
+    names = [(row if isinstance(row, str) else "") for row in result["종목명"].fillna("").tolist()]
+    vols  = [f"{int(v):,}" for v in result["거래량_전일"].tolist()]
+
+    # 번호 폭(최대 30 → 2자리) / 종목명 폭 / 거래량 폭
+    n_width = len(str(len(result))) + 1  # "1)" 형태 고려 → 3로 봐도 OK
+    name_width = max(2, max(len(s) for s in names))  # 최소 2
+    vol_width  = max(4, max(len(s) for s in vols))   # 최소 4
+
+    # <pre> 블록으로 고정폭 정렬
     lines = []
-    for i, row in enumerate(result.itertuples(index=False), start=1):
-        name = html.escape(row.종목명 or row.티커)
-        v1 = f"{int(row.거래량_전일):,}"
-        lines.append(f"{i}) {name}, {v1}")  # ✅ 번호 형식과 필드 구성
+    for i, (nm, vv) in enumerate(zip(names, vols), start=1):
+        # 데이터는 HTML 이스케이프
+        nm_esc = html.escape(nm)
+        vv_esc = html.escape(vv)
+        # 번호는 "1)" 형태, 좌측 정렬/우측 정렬 적절히 배치
+        num = f"{i})"
+        # 포맷: " 1)  <종목명 좌측정렬..>  <전일거래량 우측정렬>"
+        line = f"{num:<3} {nm_esc:<{name_width}}  {vv_esc:>{vol_width}}"
+        lines.append(line)
 
-    return header + "\n" + "\n".join(lines)
+    table = "<pre>" + "\n".join(lines) + "</pre>"
+
+    return header + table
 
 if __name__ == "__main__":
     try:
