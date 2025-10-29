@@ -140,7 +140,7 @@ def build_report():
     import unicodedata
 
     def disp_width(s: str) -> int:
-        """CJK까지 고려한 표시폭 계산 (W/F=2, 나머지=1)."""
+        """CJK 까지 고려한 표시폭 계산 (W/F=2, 나머지=1)."""
         w = 0
         for ch in s:
             w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
@@ -160,7 +160,7 @@ def build_report():
 
     d1_str, d0_str = yyyymmdd(d1_date), yyyymmdd(d0_date)
 
-    # 거래량·시총 수집 (KOSPI+KOSDAQ)
+    # 거래량·시총 수집
     vols_d1, vols_d0, caps_d1 = [], [], []
     for mkt in ["KOSPI", "KOSDAQ"]:
         vols_d1.append(get_volume_by_market(d1_str, mkt))
@@ -180,7 +180,7 @@ def build_report():
     merged["배수"] = (merged["거래량_전일"] / merged["거래량_전전일"]).round(2)
     result = merged[merged["배수"] >= 5].copy()
 
-    # 시총 붙이고 정렬 → 상위 30개
+    # 시총 정렬 → 상위 30개
     result = pd.merge(result, mcap, on="티커", how="left")
     result["시가총액"] = pd.to_numeric(result["시가총액"], errors="coerce").fillna(0)
     result.sort_values(by=["시가총액", "거래량_전일"], ascending=[False, False], inplace=True)
@@ -195,32 +195,58 @@ def build_report():
             name_map[t] = ""
     result["종목명"] = result["티커"].map(name_map)
 
-    # 헤더 + 컬럼 라벨
+    # ===== 메시지 구성 =====
     header = (
         f"<b>[거래량 급증(≥5배) – 시총 상위 30개]</b>\n"
         f"기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}\n"
-        f"(월=금↔목, 화=월↔금; 주말 미전송)\n\n"
-        f"종목명, 전일거래량\n"
+        f"(월=금↔목, 화=월↔금; 주말 미전송)\n"
     )
 
     if len(result) == 0:
-        return header + "해당 없음."
+        return header + "\n해당 없음."
 
-    # 정렬을 위한 폭 계산
+    # 데이터 준비
     names = [str(x or "") for x in result["종목명"].tolist()]
     vols  = [f"{int(v):,}" for v in result["거래량_전일"].tolist()]
-    name_width = max(2, max(disp_width(s) for s in names))   # 종목명 표시폭
-    vol_width  = max(4, max(len(s) for s in vols))           # 거래량 문자 길이(ASCII)
 
-    # 줄 구성: "1) 종목명패딩,  전일거래량(우측정렬)"
-    lines = []
+    # 폭 계산 (번호 영역 고정폭 3 + 공백 1)
+    num_field_width = 3  # "1)" 포함 3칸
+    lead_spaces = " " * (num_field_width + 1)  # 번호 뒤 공백까지
+    name_width = max(2, max(disp_width(s) for s in names))      # 종목명 표시폭
+    vol_width  = max(4, max(len(s) for s in vols))              # 거래량 자리수(ASCII)
+    gap_between = 2  # 종목명과 거래량 사이 고정 공백
+
+    # 전체 라인 목표 폭 = 번호영역+공백 + name_width + gap + vol_width
+    total_width = disp_width(lead_spaces) + name_width + gap_between + vol_width
+
+    # ==== 라벨 라인 만들기 (각 컬럼 위에 정렬) ====
+    label_name = "종목명"
+    label_vol  = "전일거래량"
+    # 왼쪽: 번호영역만큼 비워두고 '종목명'
+    label_line = lead_spaces + label_name
+    # 현재 표시폭
+    cur_w = disp_width(label_line)
+    # 오른쪽: '전일거래량'을 우측 끝에 맞추기 위해 필요한 공백 계산
+    spaces_needed = max(0, total_width - cur_w - disp_width(label_vol))
+    label_line += (" " * spaces_needed) + label_vol
+    # 인라인 고정폭 표시 + HTML 이스케이프
+    lines = [f"<code>{html.escape(label_line)}</code>"]
+
+    # ==== 데이터 라인 ====
     for i, (nm, vv) in enumerate(zip(names, vols), start=1):
         num = f"{i})"
-        line_plain = f"{num:<3} {ljust_display(nm, name_width)}, {vv.rjust(vol_width)}"
-        # 안전한 HTML 전송을 위해 한 줄 전체 이스케이프 후, 인라인 코드(<code>)로 고정폭 표시
+        # 번호 영역(좌측 정렬, 3칸) + 공백 1
+        left = f"{num:<{num_field_width}} "
+        # 종목명 좌측 정렬(표시폭 기준)
+        nm_padded = ljust_display(nm, name_width)
+        # 현재 라인 누적(왼쪽)
+        base = left + nm_padded + (" " * gap_between)
+        # 거래량은 우측 정렬: 남은 폭 = total_width - disp_width(base)
+        rem = max(0, total_width - disp_width(base) - len(vv))
+        line_plain = base + (" " * rem) + vv
         lines.append(f"<code>{html.escape(line_plain)}</code>")
 
-    return header + "\n".join(lines)
+    return header + "\n" + "\n".join(lines)
 
 if __name__ == "__main__":
     try:
