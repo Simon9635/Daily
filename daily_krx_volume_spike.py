@@ -214,7 +214,7 @@ def build_report():
     header = (
         f"<b>[SK증권]</b>\n"
         f"안녕하십니까 sk 김수민입니다\n"
-
+        f"\n"
         f"전일거래대금 급증 시총 상위 기업 리스트 전달드립니다!\n"
         f"[기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}]\n"
     )
@@ -225,7 +225,7 @@ def build_report():
     # ===== 고정 포맷 설정 =====
     num_field_width   = 3          # "1)" 영역
     NAME_WIDTH_UNITS  = 16         # ✅ 화면 표시폭 기준 16칸(한글 8글자까지 커버)
-    gap_na            = 2          # 종목명과 전일거래대금 사이 공백
+    gap_na            = 4          # 종목명과 전일거래대금 사이 공백
     amt_label         = "전일거래대금(억)"
 
     def format_name(s: str) -> str:
