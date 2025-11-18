@@ -224,23 +224,26 @@ def build_report():
     amt_label  = "전일거래대금(억)"
 
     name_width = max(disp_width(name_label), max(disp_width(s) for s in names))
-    amt_width  = max(len(amt_label), max(len(s) for s in amts))  # 거래대금은 ASCII+억이라 len() 사용
+    # 거래대금 컬럼은 "시작점"만 맞추면 되므로 폭은 굳이 안 맞춰도 되지만,
+    # 라벨과 숫자 길이를 맞춰서 보기 좋게 하기 위해 한 번 구해둠 (왼쪽 정렬)
+    amt_width  = max(len(amt_label), max(len(s) for s in amts))
 
-    gap_na = 4  # 종목명-거래대금 사이 공백 (열 간격)
+    # 컬럼 간 간격 (조금 넉넉하게)
+    gap_na = 6  # 종목명-전일거래대금 사이 공백
 
-    # ─ 라벨 라인: 번호 자리는 비워두고, 종목명/전일거래대금 각 컬럼에 배치 ─
+    # ─ 라벨 라인: 번호 자리는 비워두고, 종목명/전일거래대금을 각 컬럼 시작점에 맞춰 배치 ─
     lead = " " * (num_field_width + 1)  # 번호 + 공백
     name_label_cell = ljust_display(name_label, name_width)
-    amt_label_cell  = amt_label.rjust(amt_width)
+    amt_label_cell  = amt_label.ljust(amt_width)  # 왼쪽 정렬
 
-    label_line_plain = lead + name_label_cell + (" " * gap_na) + amt_label_cell
+    label_line_plain = f"{lead}{name_label_cell}{' ' * gap_na}{amt_label_cell}"
     lines = [f"<code>{html.escape(label_line_plain)}</code>"]
 
-    # ─ 데이터 라인: "1)  [종목명 고정폭]  [거래대금 고정폭]" ─
+    # ─ 데이터 라인: "1)  [종목명 컬럼]      [전일거래대금 컬럼]" ─
     for i, (nm, av) in enumerate(zip(names, amts), start=1):
         num_cell  = f"{str(i) + ')':<{num_field_width}}"
         name_cell = ljust_display(nm, name_width)
-        amt_cell  = av.rjust(amt_width)
+        amt_cell  = av.ljust(amt_width)   # ✅ 왼쪽 정렬 → 시작점이 항상 동일
 
         line_plain = f"{num_cell} {name_cell}{' ' * gap_na}{amt_cell}"
         lines.append(f"<code>{html.escape(line_plain)}</code>")
