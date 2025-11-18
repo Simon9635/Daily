@@ -142,19 +142,7 @@ def safe_int(n):
 
 # ---------- Build & send ----------
 def build_report():
-    import unicodedata, html
-
-    def disp_width(s: str) -> int:
-        """CJK까지 고려한 표시폭 계산 (W/F=2, 나머지=1)."""
-        w = 0
-        for ch in s:
-            w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
-        return w
-
-    def ljust_display(s: str, width: int) -> str:
-        """표시폭 기준 좌측 정렬 패딩."""
-        pad = max(0, width - disp_width(s))
-        return s + (" " * pad)
+    import html
 
     now = dt.datetime.now(KST)
     d1_date, d0_date = pick_compare_days(now)
@@ -218,34 +206,29 @@ def build_report():
     if len(result) == 0:
         return header + "\n해당 없음."
 
-    # ===== 컬럼 폭 계산 (번호 / 종목명 / 거래대금) =====
-    num_field_width = 3  # "1)" 영역
-    name_label = "종목명"
-    amt_label  = "전일거래대금(억)"
+    # ===== 고정 포맷 설정 =====
+    num_field_width = 3          # "1)" 영역
+    name_fixed_width = 8         # ✅ 종목명은 항상 8글자 폭
+    gap_na = 2                   # 종목명과 전일거래대금 사이 공백
+    amt_label = "전일거래대금(억)"
 
-    name_width = max(disp_width(name_label), max(disp_width(s) for s in names))
-    # 거래대금 컬럼은 "시작점"만 맞추면 되므로 폭은 굳이 안 맞춰도 되지만,
-    # 라벨과 숫자 길이를 맞춰서 보기 좋게 하기 위해 한 번 구해둠 (왼쪽 정렬)
-    amt_width  = max(len(amt_label), max(len(s) for s in amts))
+    def fmt_name(s: str) -> str:
+        # 종목명은 실제 길이와 무관하게 앞에서 8글자만 사용, 부족하면 공백 패딩
+        s = s[:name_fixed_width]
+        return f"{s:<{name_fixed_width}}"
 
-    # 컬럼 간 간격 (조금 넉넉하게)
-    gap_na = 6  # 종목명-전일거래대금 사이 공백
-
-    # ─ 라벨 라인: 번호 자리는 비워두고, 종목명/전일거래대금을 각 컬럼 시작점에 맞춰 배치 ─
+    # ─ 라벨 라인: 번호자리 비우고, 8글자 종목명 칼럼 뒤에 전일거래대금(억) 시작 ─
     lead = " " * (num_field_width + 1)  # 번호 + 공백
-    name_label_cell = ljust_display(name_label, name_width)
-    amt_label_cell  = amt_label.ljust(amt_width)  # 왼쪽 정렬
+    name_label_cell = fmt_name("종목명")
+    label_line_plain = f"{lead}{name_label_cell}{' ' * gap_na}{amt_label}"
 
-    label_line_plain = f"{lead}{name_label_cell}{' ' * gap_na}{amt_label_cell}"
     lines = [f"<code>{html.escape(label_line_plain)}</code>"]
 
-    # ─ 데이터 라인: "1)  [종목명 컬럼]      [전일거래대금 컬럼]" ─
+    # ─ 데이터 라인: "1)  [8글자 종목명]  [전일거래대금]" ─
     for i, (nm, av) in enumerate(zip(names, amts), start=1):
         num_cell  = f"{str(i) + ')':<{num_field_width}}"
-        name_cell = ljust_display(nm, name_width)
-        amt_cell  = av.ljust(amt_width)   # ✅ 왼쪽 정렬 → 시작점이 항상 동일
-
-        line_plain = f"{num_cell} {name_cell}{' ' * gap_na}{amt_cell}"
+        name_cell = fmt_name(nm)
+        line_plain = f"{num_cell} {name_cell}{' ' * gap_na}{av}"
         lines.append(f"<code>{html.escape(line_plain)}</code>")
 
     return header + "\n" + "\n".join(lines)
