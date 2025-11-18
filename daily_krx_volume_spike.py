@@ -206,16 +206,15 @@ def build_report():
     for v in result["거래대금_전일"].tolist():
         v_krw = int(v)
         v_eok = v_krw / 100_000_000  # 원 → 억
-        amts.append(f"{v_eok:,.1f}억")
+        amts.append(f"{v_eok:,.1f}")
 
     names = [str(x or "") for x in result["종목명"].tolist()]
 
     # ===== 메시지 헤더 =====
     header = (
-        f"<b>[SK증권]</b>\n"
+        f"[SK증권]\n"
         f"안녕하십니까 sk 김수민입니다\n"
-        f"\n"
-        f"전일거래대금 급증 시총 상위 기업 리스트 전달드립니다!\n"
+        f"<b>전일거래대금 급증 종목 공유드립니다!</b>\n"
         f"[기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}]\n"
     )
 
@@ -229,8 +228,8 @@ def build_report():
     amt_label         = "전일거래대금(억)"
 
     def format_name(s: str) -> str:
-        # 종목명은 최대 8글자까지만 사용 (그 이상은 잘라냄)
-        s_trunc = s[:8]
+        # 종목명은 최대 5글자까지만 사용 (그 이상은 잘라냄)
+        s_trunc = s[:5]
         # 표시폭 기준 16칸이 되도록 공백 패딩
         return ljust_display(s_trunc, NAME_WIDTH_UNITS)
 
