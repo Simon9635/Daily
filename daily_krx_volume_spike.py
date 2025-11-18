@@ -228,7 +228,7 @@ def build_report():
     lines = [f"<code>{html.escape(label_line)}</code>"]
 
     # ─ 데이터 라인: 번호 + 종목명 좌정렬 + 거래대금 우정렬(끝자리 맞춤) + 비고 ─
-    for i, (nm, av, nt) in enumerate(zip(names, amts, notes), start=1):
+    for i, (nm, av, nt) in enumerate(zip(names, amts), start=1):
         left = f"{(str(i)+')'):<{num_field_width}} " + ljust_display(nm, name_width) + (" " * gap_na)
         cur = disp_width(left)
         # 거래대금 우측 끝 맞추기
