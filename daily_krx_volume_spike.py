@@ -142,7 +142,21 @@ def safe_int(n):
 
 # ---------- Build & send ----------
 def build_report():
-    import html
+    import unicodedata, html
+
+    # ---- 한글 2칸 폭 고려한 표시폭 계산 ----
+    def disp_width(s: str) -> int:
+        w = 0
+        for ch in s:
+            # W/F = wide/fullwidth → 2칸, 나머지 1칸
+            w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        return w
+
+    def ljust_display(s: str, width_units: int) -> str:
+        """표시폭(width_units 기준) 만큼 좌측 정렬 + 공백 패딩."""
+        cur = disp_width(s)
+        pad = max(0, width_units - cur)
+        return s + (" " * pad)
 
     now = dt.datetime.now(KST)
     d1_date, d0_date = pick_compare_days(now)
@@ -207,32 +221,32 @@ def build_report():
         return header + "\n해당 없음."
 
     # ===== 고정 포맷 설정 =====
-    num_field_width = 3          # "1)" 영역
-    name_fixed_width = 8         # ✅ 종목명은 항상 8글자 폭
-    gap_na = 2                   # 종목명과 전일거래대금 사이 공백
-    amt_label = "전일거래대금(억)"
+    num_field_width   = 3          # "1)" 영역
+    NAME_WIDTH_UNITS  = 16         # ✅ 화면 표시폭 기준 16칸(한글 8글자까지 커버)
+    gap_na            = 2          # 종목명과 전일거래대금 사이 공백
+    amt_label         = "전일거래대금(억)"
 
-    def fmt_name(s: str) -> str:
-        # 종목명은 실제 길이와 무관하게 앞에서 8글자만 사용, 부족하면 공백 패딩
-        s = s[:name_fixed_width]
-        return f"{s:<{name_fixed_width}}"
+    def format_name(s: str) -> str:
+        # 종목명은 최대 8글자까지만 사용 (그 이상은 잘라냄)
+        s_trunc = s[:8]
+        # 표시폭 기준 16칸이 되도록 공백 패딩
+        return ljust_display(s_trunc, NAME_WIDTH_UNITS)
 
-    # ─ 라벨 라인: 번호자리 비우고, 8글자 종목명 칼럼 뒤에 전일거래대금(억) 시작 ─
+    # ─ 라벨 라인: 번호자리 비우고, 고정폭 종목명 칼럼 + 전일거래대금(억) ─
     lead = " " * (num_field_width + 1)  # 번호 + 공백
-    name_label_cell = fmt_name("종목명")
+    name_label_cell = format_name("종목명")
     label_line_plain = f"{lead}{name_label_cell}{' ' * gap_na}{amt_label}"
-
     lines = [f"<code>{html.escape(label_line_plain)}</code>"]
 
-    # ─ 데이터 라인: "1)  [8글자 종목명]  [전일거래대금]" ─
+    # ─ 데이터 라인: "1)  [고정폭 종목명(시작/끝 동일)]  [전일거래대금]" ─
     for i, (nm, av) in enumerate(zip(names, amts), start=1):
         num_cell  = f"{str(i) + ')':<{num_field_width}}"
-        name_cell = fmt_name(nm)
+        name_cell = format_name(nm)
         line_plain = f"{num_cell} {name_cell}{' ' * gap_na}{av}"
         lines.append(f"<code>{html.escape(line_plain)}</code>")
 
     return header + "\n" + "\n".join(lines)
-
+    
 if __name__ == "__main__":
     try:
         msg = build_report()
