@@ -226,7 +226,7 @@ def build_report():
     name_width = max(disp_width(name_label), max(disp_width(s) for s in names))
     amt_width  = max(len(amt_label), max(len(s) for s in amts))  # 거래대금은 ASCII+억이라 len() 사용
 
-    gap_na = 2  # 종목명-거래대금 사이 공백 (열 간격)
+    gap_na = 4  # 종목명-거래대금 사이 공백 (열 간격)
 
     # ─ 라벨 라인: 번호 자리는 비워두고, 종목명/전일거래대금 각 컬럼에 배치 ─
     lead = " " * (num_field_width + 1)  # 번호 + 공백
