@@ -142,7 +142,7 @@ def safe_int(n):
 
 # ---------- Build & send ----------
 def build_report():
-    import unicodedata
+    import unicodedata, html
 
     def disp_width(s: str) -> int:
         """CJK까지 고려한 표시폭 계산 (W/F=2, 나머지=1)."""
@@ -218,37 +218,31 @@ def build_report():
     if len(result) == 0:
         return header + "\n해당 없음."
 
-    # ===== 정렬용 폭 계산 (번호/종목명/거래대금) =====
-    num_field_width = 3  # "1)" 포함 영역
-    name_width = max(2, max(disp_width(s) for s in names))
-    amt_width  = max(4, max(len(s) for s in amts))  # 숫자+콤마+소수+억
+    # ===== 컬럼 폭 계산 (번호 / 종목명 / 거래대금) =====
+    num_field_width = 3  # "1)" 영역
+    name_label = "종목명"
+    amt_label  = "전일거래대금(억)"
 
-    gap_na = 2  # 종목명과 거래대금 사이 공백
+    name_width = max(disp_width(name_label), max(disp_width(s) for s in names))
+    amt_width  = max(len(amt_label), max(len(s) for s in amts))  # 거래대금은 ASCII+억이라 len() 사용
 
-    # ─ 라벨 라인: 종목명 라벨 + 전일거래대금(억) 라벨 ─
+    gap_na = 2  # 종목명-거래대금 사이 공백 (열 간격)
+
+    # ─ 라벨 라인: 번호 자리는 비워두고, 종목명/전일거래대금 각 컬럼에 배치 ─
     lead = " " * (num_field_width + 1)  # 번호 + 공백
-    label_line = lead + "종목명"
-    cur_w = disp_width(label_line)
+    name_label_cell = ljust_display(name_label, name_width)
+    amt_label_cell  = amt_label.rjust(amt_width)
 
-    amount_label = "전일거래대금(억)"
-    start_amt_left = (num_field_width + 1) + name_width + gap_na
-    right_edge_amt = start_amt_left + amt_width
-    pad_for_amt = max(1, right_edge_amt - disp_width(amount_label) - cur_w)
-    label_line += " " * pad_for_amt + amount_label
+    label_line_plain = lead + name_label_cell + (" " * gap_na) + amt_label_cell
+    lines = [f"<code>{html.escape(label_line_plain)}</code>"]
 
-    lines = [f"<code>{html.escape(label_line)}</code>"]
-
-    # ─ 데이터 라인: "1) 종목명············  123.4억" 형태 (쉼표 없음) ─
+    # ─ 데이터 라인: "1)  [종목명 고정폭]  [거래대금 고정폭]" ─
     for i, (nm, av) in enumerate(zip(names, amts), start=1):
-        # 번호 + 공백 + 종목명(좌측정렬)
-        left = f"{(str(i) + ')'):<{num_field_width}} " + ljust_display(nm, name_width) + (" " * gap_na)
-        cur = disp_width(left)
+        num_cell  = f"{str(i) + ')':<{num_field_width}}"
+        name_cell = ljust_display(nm, name_width)
+        amt_cell  = av.rjust(amt_width)
 
-        # 거래대금 우측 끝 맞추기 (끝자리 숫자 같은 열)
-        target_amt_right = (num_field_width + 1) + name_width + gap_na + amt_width
-        pad_left_amt = max(0, target_amt_right - len(av) - cur)
-        line_plain = left + (" " * pad_left_amt) + av
-
+        line_plain = f"{num_cell} {name_cell}{' ' * gap_na}{amt_cell}"
         lines.append(f"<code>{html.escape(line_plain)}</code>")
 
     return header + "\n" + "\n".join(lines)
