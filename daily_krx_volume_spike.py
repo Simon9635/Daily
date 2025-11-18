@@ -212,9 +212,11 @@ def build_report():
 
     # ===== 메시지 헤더 =====
     header = (
-        f"<b>[거래대금 급증(≥5배) – 시총 상위 30개]</b>\n"
-        f"기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}\n"
-        f"(월=금↔목, 화=월↔금; 주말 미전송)\n"
+        f"<b>[SK증권]</b>\n"
+        f"안녕하십니까 sk 김수민입니다\n"
+
+        f"전일거래대금 급증 시총 상위 기업 리스트 전달드립니다!\n"
+        f"[기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}]\n"
     )
 
     if len(result) == 0:
