@@ -106,7 +106,9 @@ def get_trading_value_by_market(datestr: str, market: str) -> pd.DataFrame:
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=["티커", "거래대금", "시장"])
     df = df.reset_index()
-    val_col = "거래대금" if "거래대금" in df.columns else next((c for c in df.columns if "대금" in c), None)
+    val_col = "거래대금" if "거래대금" in df.columns else next(
+        (c for c in df.columns if "대금" in c), None
+    )
     if not val_col:
         return pd.DataFrame(columns=["티커", "거래대금", "시장"])
     out = df[["티커", val_col]].copy()
@@ -143,99 +145,110 @@ def build_report():
     import unicodedata
 
     def disp_width(s: str) -> int:
+        """CJK까지 고려한 표시폭 계산 (W/F=2, 나머지=1)."""
         w = 0
         for ch in s:
             w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
         return w
 
     def ljust_display(s: str, width: int) -> str:
+        """표시폭 기준 좌측 정렬 패딩."""
         pad = max(0, width - disp_width(s))
         return s + (" " * pad)
 
     now = dt.datetime.now(KST)
     d1_date, d0_date = pick_compare_days(now)
     if d1_date is None:
-        return None
+        return None  # 주말은 스킵
 
     d1_str, d0_str = yyyymmdd(d1_date), yyyymmdd(d0_date)
 
-    # --- 데이터 수집: 거래대금/시총 (KOSPI+KOSDAQ) ---
+    # --- 거래대금 / 시총 수집 (KOSPI + KOSDAQ) ---
     vals_d1, vals_d0, caps_d1 = [], [], []
     for mkt in ["KOSPI", "KOSDAQ"]:
         vals_d1.append(get_trading_value_by_market(d1_str, mkt))
         vals_d0.append(get_trading_value_by_market(d0_str, mkt))
-        caps_d1.append(get_mcap_by_market(d1_str, mkt))  # 정렬용 시총은 '전일' 기준
+        caps_d1.append(get_mcap_by_market(d1_str, mkt))
 
-    val1 = pd.concat(vals_d1, ignore_index=True) if vals_d1 else pd.DataFrame(columns=["티커","거래대금","시장"])
-    val0 = pd.concat(vals_d0, ignore_index=True) if vals_d0 else pd.DataFrame(columns=["티커","거래대금","시장"])
-    mcap = pd.concat(caps_d1, ignore_index=True) if caps_d1 else pd.DataFrame(columns=["티커","시가총액"])
+    val1 = pd.concat(vals_d1, ignore_index=True) if vals_d1 else pd.DataFrame(columns=["티커", "거래대금", "시장"])
+    val0 = pd.concat(vals_d0, ignore_index=True) if vals_d0 else pd.DataFrame(columns=["티커", "거래대금", "시장"])
+    mcap = pd.concat(caps_d1, ignore_index=True) if caps_d1 else pd.DataFrame(columns=["티커", "시가총액"])
 
-    # --- 병합 및 필터: 전일/전전일 거래대금 5배 ---
+    # --- 전일/전전일 거래대금 5배 필터 ---
     merged = pd.merge(val1, val0, on=["티커"], how="inner", suffixes=("_전일", "_전전일"))
     for col in ["거래대금_전일", "거래대금_전전일"]:
         merged[col] = pd.to_numeric(merged[col], errors="coerce")
     merged = merged.dropna(subset=["거래대금_전일", "거래대금_전전일"])
     merged = merged[merged["거래대금_전전일"] > 0]
     merged["배수"] = (merged["거래대금_전일"] / merged["거래대금_전전일"]).round(2)
+
     result = merged[merged["배수"] >= 5].copy()
 
-    # --- 시총 정렬 → 상위 30 ---
+    # --- 시총 기준 정렬 → 상위 30개 ---
     result = pd.merge(result, mcap, on="티커", how="left")
     result["시가총액"] = pd.to_numeric(result["시가총액"], errors="coerce").fillna(0)
     result.sort_values(by=["시가총액", "거래대금_전일"], ascending=[False, False], inplace=True)
     result = result.head(30).reset_index(drop=True)
 
     # --- 종목명 매핑 ---
-    name_map, tickers = {}, result["티커"].tolist()
-    for t in tickers:
+    name_map = {}
+    for t in result["티커"].tolist():
         try:
             name_map[t] = stock.get_market_ticker_name(t)
         except Exception:
             name_map[t] = ""
     result["종목명"] = result["티커"].map(name_map)
 
-    # ===== 메시지 구성 (라벨을 각 열 위에 정렬, 쉼표 없음, 끝자리 맞춤) =====
+    # ---- 거래대금 억 단위(소수 1자리)로 변환 ----
+    amts = []
+    for v in result["거래대금_전일"].tolist():
+        v_krw = int(v)
+        v_eok = v_krw / 100_000_000  # 원 → 억
+        amts.append(f"{v_eok:,.1f}억")
+
+    names = [str(x or "") for x in result["종목명"].tolist()]
+
+    # ===== 메시지 헤더 =====
     header = (
         f"<b>[거래대금 급증(≥5배) – 시총 상위 30개]</b>\n"
         f"기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}\n"
         f"(월=금↔목, 화=월↔금; 주말 미전송)\n"
     )
+
     if len(result) == 0:
         return header + "\n해당 없음."
 
-    names = [str(x or "") for x in result["종목명"].tolist()]
-    amts  = [f"{int(v):,}" for v in result["거래대금_전일"].tolist()]  # 원 단위, 콤마 표기
-
-    num_field_width = 3  # "1)" 3칸
+    # ===== 정렬용 폭 계산 (번호/종목명/거래대금) =====
+    num_field_width = 3  # "1)" 포함 영역
     name_width = max(2, max(disp_width(s) for s in names))
-    amt_width  = max(4, max(len(s) for s in amts))
-    gap_na, gap_an = 2, 2  # 이름-대금, 대금-비고 사이 공백
+    amt_width  = max(4, max(len(s) for s in amts))  # 숫자+콤마+소수+억
 
-    # 전체 목표 폭 = 번호+공백 + name + gap_na + amt
-    total_width = (num_field_width + 1) + name_width + gap_na + amt_width 
+    gap_na = 2  # 종목명과 거래대금 사이 공백
 
-    # ─ 라벨 라인: '종목명'은 이름열 위, '전일거래대금'은 수치열의 '우측 끝' 위, '비고'는 비고열 시작 위 ─
-    lead = " " * (num_field_width + 1)
+    # ─ 라벨 라인: 종목명 라벨 + 전일거래대금(억) 라벨 ─
+    lead = " " * (num_field_width + 1)  # 번호 + 공백
     label_line = lead + "종목명"
     cur_w = disp_width(label_line)
 
-    # 거래대금 라벨을 수치열의 '오른쪽 끝' 기준으로 정렬
+    amount_label = "전일거래대금(억)"
     start_amt_left = (num_field_width + 1) + name_width + gap_na
     right_edge_amt = start_amt_left + amt_width
-    pad_for_amt = max(1, right_edge_amt - disp_width("전일거래대금") - cur_w)
-    label_line += " " * pad_for_amt + "전일거래대금"
+    pad_for_amt = max(1, right_edge_amt - disp_width(amount_label) - cur_w)
+    label_line += " " * pad_for_amt + amount_label
 
     lines = [f"<code>{html.escape(label_line)}</code>"]
 
-    # ─ 데이터 라인: 번호 + 종목명 좌정렬 + 거래대금 우정렬(끝자리 맞춤) + 비고 ─
-    for i, (nm, av, nt) in enumerate(zip(names, amts), start=1):
-        left = f"{(str(i)+')'):<{num_field_width}} " + ljust_display(nm, name_width) + (" " * gap_na)
+    # ─ 데이터 라인: "1) 종목명············  123.4억" 형태 (쉼표 없음) ─
+    for i, (nm, av) in enumerate(zip(names, amts), start=1):
+        # 번호 + 공백 + 종목명(좌측정렬)
+        left = f"{(str(i) + ')'):<{num_field_width}} " + ljust_display(nm, name_width) + (" " * gap_na)
         cur = disp_width(left)
-        # 거래대금 우측 끝 맞추기
+
+        # 거래대금 우측 끝 맞추기 (끝자리 숫자 같은 열)
         target_amt_right = (num_field_width + 1) + name_width + gap_na + amt_width
         pad_left_amt = max(0, target_amt_right - len(av) - cur)
-        line = left + (" " * pad_left_amt) + av
-        
+        line_plain = left + (" " * pad_left_amt) + av
+
         lines.append(f"<code>{html.escape(line_plain)}</code>")
 
     return header + "\n" + "\n".join(lines)
