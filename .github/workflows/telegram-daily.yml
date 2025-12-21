@@ -26,6 +26,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install pykrx pandas
 
+          # 3. 라이브러리 설치 (requirements.txt 이용)
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
       - name: Run report & send to Telegram
         run: python daily_krx_volume_spike.py
-        
