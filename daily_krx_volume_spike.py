@@ -6,6 +6,11 @@ import html
 import datetime as dt
 from urllib import request, parse
 
+# --- [뉴스 크롤링 라이브러리] ---
+import requests
+from bs4 import BeautifulSoup
+import re
+
 # --- Telegram ENV ---
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -140,6 +145,42 @@ def safe_int(n):
     except Exception:
         return 0
 
+def get_news_keyword(ticker: str) -> str:
+    """네이버 금융 뉴스 제목에서 핵심 키워드(7자 이내) 추출"""
+    try:
+        url = f"https://finance.naver.com/item/news_news.nhn?code={ticker}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        resp = requests.get(url, headers=headers, timeout=2) # 2초 타임아웃
+        soup = BeautifulSoup(resp.content, "html.parser")
+        
+        # 첫 번째 뉴스 제목 가져오기
+        item = soup.select_one(".type5 tbody tr .title a")
+        if not item: return ""
+        
+        title = item.get_text().strip()
+        
+        # [전처리] 괄호 및 불필요한 단어 제거
+        title = re.sub(r'\[.*?\]|\(.*?\)|\<.*?\>', '', title) # 대괄호,소괄호 제거
+        stop_words = ["특징주", "급등", "강세", "상승", "하락", "주가", "관련주", "영향", "부각", "소식", "체결", "::", "전일대비"]
+        for w in stop_words:
+            title = title.replace(w, " ")
+            
+        # [추출] 띄어쓰기 기준으로 단어를 합쳐서 7자 이내로 만들기
+        keywords = ""
+        for word in title.split():
+            # 특수문자만 있는 단어 건너뛰기
+            if not any(c.isalnum() for c in word): continue
+            
+            # 합쳤을 때 7자 넘으면 중단
+            if len(keywords + word) > 7:
+                if not keywords: keywords = word[:6] + "." # 첫 단어가 길면 자름
+                break
+            keywords += word + " "
+            
+        return keywords.strip()
+    except Exception:
+        return ""
+
 # ---------- Build & send ----------
 def build_report():
     import unicodedata, html
@@ -233,18 +274,37 @@ def build_report():
         # 표시폭 기준 16칸이 되도록 공백 패딩
         return ljust_display(s_trunc, NAME_WIDTH_UNITS)
 
-    # ─ 라벨 라인: 번호자리 비우고, 고정폭 종목명 칼럼 + 전일거래대금(억) ─
-    lead = " " * (num_field_width + 1)  # 번호 + 공백
+    # === [수정됨] 티커 리스트 가져오기 ===
+    tickers = result["티커"].tolist() 
+
+    # ─ 라벨 라인: 종목명 / 대금 / 재료 ─
+    lead = " " * (num_field_width + 1)
     name_label_cell = format_name("종목명")
-    label_line_plain = f"{lead}{name_label_cell}{' ' * gap_na}{amt_label}"
+    # 헤더에 '재료' 추가
+    label_line_plain = f"{lead}{name_label_cell}{' ' * gap_na}{amt_label} {'재료'}"
     lines = [f"<code>{html.escape(label_line_plain)}</code>"]
 
-    # ─ 데이터 라인: "1)  [고정폭 종목명(시작/끝 동일)]  [전일거래대금]" ─
-    for i, (nm, av) in enumerate(zip(names, amts), start=1):
+    # ─ 데이터 라인: "1)  [종목명]  [대금]  [재료(링크)]" ─
+    # zip에 tickers 추가
+    for i, (nm, av, t_code) in enumerate(zip(names, amts, tickers), start=1):
         num_cell  = f"{str(i) + ')':<{num_field_width}}"
         name_cell = format_name(nm)
-        line_plain = f"{num_cell} {name_cell}{' ' * gap_na}{av}"
-        lines.append(f"<code>{html.escape(line_plain)}</code>")
+        
+        # 1. 뉴스 키워드 가져오기 (7자 이내)
+        kwd = get_news_keyword(t_code)
+        
+        # 2. 기본 정보 (Code Block)
+        line_fixed = f"{num_cell} {name_cell}{' ' * gap_na}{av}"
+        
+        # 3. 재료 붙이기 (링크 포함)
+        # 키워드가 있으면 파란색 링크, 없으면 공란
+        if kwd:
+            news_part = f" <a href='https://finance.naver.com/item/news_news.nhn?code={t_code}'>{kwd}</a>"
+        else:
+            news_part = ""
+            
+        # 최종 라인 조립
+        lines.append(f"<code>{html.escape(line_fixed)}</code>{news_part}")
 
     return header + "\n" + "\n".join(lines)
     
