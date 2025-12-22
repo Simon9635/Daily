@@ -296,7 +296,7 @@ def build_report():
     h_chart= center_align("차트", W_CHART)
     
     # 헤더 라인 조립
-    header_line = f"{h_rank}{GAPSS}{h_name}{GAP}{h_amt}{GAP}{GAPS}{h_chart}"
+    header_line = f"{h_rank}{GAPSS}{h_name}{GAP}{GAPS}{h_amt}{GAP}{GAPS}{h_chart}"
     lines = [f"<code>{html.escape(header_line)}</code>"]
     lines.append("-" * 40) # 구분선
 
