@@ -146,56 +146,61 @@ def safe_int(n):
     except Exception:
         return 0
 
-# ---------- [업데이트 1] 뉴스 키워드 지능형 추출 ----------
-def get_news_keyword(ticker: str) -> str:
+# [교체] 차트 위치 분석 함수
+def get_chart_status(ticker: str, current_price: int) -> str:
+    """
+    현재가와 최근 60일 데이터를 비교하여 차트 위치 반환
+    우선순위: 신고가 > 역배열 > 박스상단 > 정배열 > 바닥권 > 중립
+    """
     try:
-        url = f"https://finance.naver.com/item/news_news.nhn?code={ticker}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0',
-            'Referer': f'https://finance.naver.com/item/news.nhn?code={ticker}'
-        }
-        resp = requests.get(url, headers=headers, timeout=2)
-        soup = BeautifulSoup(resp.content, "html.parser")
+        # 오늘 기준 최근 100일(약 3개월) 데이터 조회
+        today = dt.datetime.now(KST).strftime("%Y%m%d")
+        start_day = (dt.datetime.now(KST) - dt.timedelta(days=120)).strftime("%Y%m%d")
         
-        # iframe 내 뉴스 리스트 선택자 (tbody 제거)
-        item = soup.select_one(".type5 .title a")
-        if not item: return ""
+        df = stock.get_market_ohlcv_by_date(start_day, today, ticker)
         
-        title = item.get_text().strip()
-        
-        # 1. 말머리 및 괄호 제거
-        title = re.sub(r'\[.*?\]|\(.*?\)|\<.*?\>', '', title)
-        
-        # 2. 불필요한 단어(Stop words) 제거 리스트 업데이트
-        stop_words = [
-            "특징주", "급등", "강세", "상승", "하락", "급락", "주가", "관련주", "영향", "부각", 
-            "소식", "체결", "::", "전일대비", "오전", "오후", "장중", "마감", "속보", "공시", 
-            "발표", "분석", "전망", "실적", "최대", "개선", "회복", "우려", "기대", "감소", 
-            "증가", "돌파", "경신", "유입", "확대", "축소", "약세", "보합", "출발", "상위", 
-            "종목", "투자", "유치", "확보", "개발", "성공", "승인", "허가", "취득", "공급", 
-            "계약", "협력", "제휴", "진출", "본격화", "개시", "시작"
-        ]
-        for w in stop_words:
-            title = title.replace(w, " ")
+        if df.empty or len(df) < 60:
+            return "정보부족"
 
-        # 3. 핵심 단어만 남기기 (7자 제한)
-        keywords = ""
-        for word in title.split():
-            if not any(c.isalnum() for c in word): continue # 특수문자만 있으면 패스
-            
-            # 합쳤을 때 7자 넘어가면 중단
-            if len(keywords + word) > 7:
-                if not keywords: keywords = word[:6] + "."
-                break
-            keywords += word + " "
-            
-        return keywords.strip()
+        # 최근 종가 기준
+        close = df['종가']
+        
+        # 1. 52주 신고가 근처 (여기선 편의상 60일 고가 돌파로 근사 or 신고가 API 사용)
+        # 강력한 시세 분출 신호
+        recent_high = close.max()
+        if current_price >= recent_high * 0.98: # 고점 대비 -2% 이내
+            return "🔥신고가"
+
+        # 이동평균선 계산
+        ma5 = close.rolling(window=5).mean().iloc[-1]
+        ma20 = close.rolling(window=20).mean().iloc[-1]
+        ma60 = close.rolling(window=60).mean().iloc[-1]
+
+        # 2. 역배열 (하락 추세)
+        # 60일선 > 20일선 > 5일선 구조
+        if ma60 > ma20 > ma5:
+            return "📉역배열"
+
+        # 3. 박스권 상단
+        # 신고가는 아니지만, 최근 60일 내 상위 10% 가격대에 위치
+        recent_low = close.min()
+        position = (current_price - recent_low) / (recent_high - recent_low)
+        if position >= 0.8:
+            return "📦박스상단"
+        
+        # 4. 바닥권
+        # 하위 20% 가격대
+        if position <= 0.2:
+            return "💧바닥권"
+
+        # 5. 정배열 (상승 추세 초입~진행)
+        if ma5 > ma20 > ma60:
+            return "📈정배열"
+
+        return "⚖️중립"
+
     except Exception:
-        return ""
-
-# [추가] 글자 폭 계산 함수 (한글=2, 영어=1)
-def disp_width(s):
-    return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 1 for c in s)
+        return "-"
 
 # ---------- Build & send ----------
 def build_report():
@@ -296,35 +301,32 @@ def build_report():
     # ─ 라벨 라인: 종목명 / 대금 / 재료 ─
     lead = " " * (num_field_width + 1)
     name_label_cell = format_name("종목명")
+
+    # 차트 칼럼 목표 너비: 10칸 (이모지+글자 고려)
+    CHART_WIDTH = 10 
+    header_chart = ljust_display("차트", CHART_WIDTH).replace("차트", "   차트")
+
     # 헤더에 '재료' 추가
-    label_line_plain = f"{lead}{name_label_cell}{' ' * gap_na}{amt_label} {'재료'}"
+    label_line_plain = f"{lead}{name_label_cell}{' ' * gap_na}{amt_label} {'차트'}"
     lines = [f"<code>{html.escape(label_line_plain)}</code>"]
 
-# ─ 데이터 라인 생성 (for문 전체 교체) ─
+# ─ 데이터 라인 수정 (for문 교체) ─
     for i, (nm, av, t_code) in enumerate(zip(names, amts, tickers), start=1):
         num_cell  = f"{str(i) + ')':<{num_field_width}}"
         name_cell = format_name(nm)
         
-        # 1. 키워드 가져오기
-        kwd = get_news_keyword(t_code)
+        # 1. 차트 상태 분석 (함수 호출)
+        status = get_chart_status(t_code)
         
-        # 2. [오른쪽 정렬 핵심] 왼쪽 패딩 계산
-        # '재료' 칼럼의 목표 너비를 14칸(한글 7자)으로 잡음
-        TARGET_WIDTH = 14
+        # 2. [오른쪽 정렬] 차트 상태 패딩 계산
+        # (목표 너비 - 실제 글자 너비) 만큼 왼쪽에 공백을 채움
+        pad_len = max(0, CHART_WIDTH - disp_width(status))
+        padding = " " * pad_len
         
-        if kwd:
-            # (목표 너비 - 실제 글자 너비) 만큼 공백 생성
-            space_len = max(0, TARGET_WIDTH - disp_width(kwd))
-            padding = " " * space_len
-            
-            # [중요] Telegram에서는 <code> 안에 공백을 넣어야 간격이 유지됨
-            # 기존 정보 + 패딩까지 회색 박스로 감싸고 -> 그 뒤에 링크를 붙임
-            row_str = f"<code>{html.escape(num_cell)} {html.escape(name_cell)}{' ' * gap_na}{av}{padding}</code><a href='https://finance.naver.com/item/news_news.nhn?code={t_code}'>{html.escape(kwd)}</a>"
-        else:
-            # 뉴스가 없으면 그냥 회색 박스 닫기
-            row_str = f"<code>{html.escape(num_cell)} {html.escape(name_cell)}{' ' * gap_na}{av}</code>"
-
-        lines.append(row_str)
+        # 3. 한 줄 완성 (전부 Code Block 안에 넣어서 정렬 유지)
+        line_fixed = f"{num_cell} {name_cell}{' ' * gap_na}{av}   {padding}{status}"
+        
+        lines.append(f"<code>{html.escape(line_fixed)}</code>")
 
     return header + "\n" + "\n".join(lines)
     
