@@ -281,20 +281,21 @@ def build_report():
 
     # ===== [설정] 테이블 칼럼 너비 및 간격 (가운데 정렬용) =====
     # 전체 모양: [순위(3)] [공백] [종목(10)] [공백] [대금(9)] [공백] [차트(10)]
-    W_RANK = 2    # "1) "
+    W_RANK = 3    # "1) "
     W_NAME = 12   # 종목명 (넉넉하게 6글자 폭)
     W_AMT  = 10   # 거래대금 (1,234.5)
     W_CHART= 10   # 차트 (이모지 포함)
     GAP    = "     "  # 투명한 줄(Separation) 역할 (공백 1칸)
+    GAPS   = " "
 
     # 1. 헤더 생성 (가운데 정렬 적용)
-    h_rank = "" * W_RANK
+    h_rank = " " * W_RANK
     h_name = center_align("종목", W_NAME)
     h_amt  = center_align("거래대금(억)", W_AMT)
     h_chart= center_align("차트", W_CHART)
     
     # 헤더 라인 조립
-    header_line = f"{h_rank}{GAP}{h_name}{GAP}{h_amt}{GAP}{h_chart}"
+    header_line = f"{h_rank}{GAPS}{h_name}{GAP}{h_amt}{GAP}{h_chart}"
     lines = [f"<code>{html.escape(header_line)}</code>"]
     lines.append("-" * 40) # 구분선
 
