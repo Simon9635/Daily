@@ -316,7 +316,7 @@ def build_report():
         chart_str = center_align(status, W_CHART)
         
         # 라인 조립 (Code Block으로 감싸서 정렬 유지)
-        row_str = f"{rank_str}{GAP}{name_str}{GAP}{amt_str}{GAP}{chart_str}"
+        row_str = f"{rank_str}{GAPS}{name_str}{GAP}{amt_str}{GAP}{chart_str}"
         lines.append(f"<code>{html.escape(row_str)}</code>")
 
     return header + "\n" + "\n".join(lines)
