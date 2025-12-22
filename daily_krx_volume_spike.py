@@ -5,6 +5,7 @@ import json
 import html
 import datetime as dt
 from urllib import request, parse
+import unicodedata  # <--- 이 줄을 import 모여있는 곳에 추가해주세요
 
 # --- [뉴스 크롤링 라이브러리] ---
 import requests
@@ -192,6 +193,10 @@ def get_news_keyword(ticker: str) -> str:
     except Exception:
         return ""
 
+# [추가] 글자 폭 계산 함수 (한글=2, 영어=1)
+def disp_width(s):
+    return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 1 for c in s)
+
 # ---------- Build & send ----------
 def build_report():
     import unicodedata, html
@@ -295,27 +300,31 @@ def build_report():
     label_line_plain = f"{lead}{name_label_cell}{' ' * gap_na}{amt_label} {'재료'}"
     lines = [f"<code>{html.escape(label_line_plain)}</code>"]
 
-    # ─ 데이터 라인: "1)  [종목명]  [대금]  [재료(링크)]" ─
-    # zip에 tickers 추가
+# ─ 데이터 라인 생성 (for문 전체 교체) ─
     for i, (nm, av, t_code) in enumerate(zip(names, amts, tickers), start=1):
         num_cell  = f"{str(i) + ')':<{num_field_width}}"
         name_cell = format_name(nm)
         
-        # 1. 뉴스 키워드 가져오기 (7자 이내)
+        # 1. 키워드 가져오기
         kwd = get_news_keyword(t_code)
         
-        # 2. 기본 정보 (Code Block)
-        line_fixed = f"{num_cell} {name_cell}{' ' * gap_na}{av}"
+        # 2. [오른쪽 정렬 핵심] 왼쪽 패딩 계산
+        # '재료' 칼럼의 목표 너비를 14칸(한글 7자)으로 잡음
+        TARGET_WIDTH = 14
         
-        # 3. 재료 붙이기 (링크 포함)
-        # 키워드가 있으면 파란색 링크, 없으면 공란
         if kwd:
-            news_part = f" <a href='https://finance.naver.com/item/news_news.nhn?code={t_code}'>{kwd}</a>"
-        else:
-            news_part = ""
+            # (목표 너비 - 실제 글자 너비) 만큼 공백 생성
+            space_len = max(0, TARGET_WIDTH - disp_width(kwd))
+            padding = " " * space_len
             
-        # 최종 라인 조립
-        lines.append(f"<code>{html.escape(line_fixed)}</code>{news_part}")
+            # [중요] Telegram에서는 <code> 안에 공백을 넣어야 간격이 유지됨
+            # 기존 정보 + 패딩까지 회색 박스로 감싸고 -> 그 뒤에 링크를 붙임
+            row_str = f"<code>{html.escape(num_cell)} {html.escape(name_cell)}{' ' * gap_na}{av}{padding}</code><a href='https://finance.naver.com/item/news_news.nhn?code={t_code}'>{html.escape(kwd)}</a>"
+        else:
+            # 뉴스가 없으면 그냥 회색 박스 닫기
+            row_str = f"<code>{html.escape(num_cell)} {html.escape(name_cell)}{' ' * gap_na}{av}</code>"
+
+        lines.append(row_str)
 
     return header + "\n" + "\n".join(lines)
     
