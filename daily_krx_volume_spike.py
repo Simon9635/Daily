@@ -290,7 +290,7 @@ def build_report():
     # 1. 헤더 생성 (가운데 정렬 적용)
     h_rank = " " * W_RANK
     h_name = center_align("종목", W_NAME)
-    h_amt  = center_align("대금", W_AMT)
+    h_amt  = center_align("거래대금(억)", W_AMT)
     h_chart= center_align("차트", W_CHART)
     
     # 헤더 라인 조립
