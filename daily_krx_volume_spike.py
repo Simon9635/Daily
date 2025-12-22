@@ -146,29 +146,30 @@ def safe_int(n):
     except Exception:
         return 0
 
-# [교체] 차트 위치 분석 함수
-def get_chart_status(ticker: str, current_price: int) -> str:
+# [수정] 차트 위치 분석 함수 (입력값에서 current_price 제거함)
+def get_chart_status(ticker: str) -> str:
     """
-    현재가와 최근 60일 데이터를 비교하여 차트 위치 반환
-    우선순위: 신고가 > 역배열 > 박스상단 > 정배열 > 바닥권 > 중립
+    최근 60일 데이터를 분석하여 차트 위치(신고가, 역배열 등) 반환
+    (내부에서 현재가를 직접 조회하도록 수정됨)
     """
     try:
-        # 오늘 기준 최근 100일(약 3개월) 데이터 조회
-        today = dt.datetime.now(KST).strftime("%Y%m%d")
-        start_day = (dt.datetime.now(KST) - dt.timedelta(days=120)).strftime("%Y%m%d")
+        # 오늘 기준 최근 120일 데이터 조회
+        now = dt.datetime.now(KST)
+        today = now.strftime("%Y%m%d")
+        start_day = (now - dt.timedelta(days=120)).strftime("%Y%m%d")
         
+        # 일별 시세 조회
         df = stock.get_market_ohlcv_by_date(start_day, today, ticker)
         
         if df.empty or len(df) < 60:
-            return "정보부족"
+            return "-" # 데이터 부족
 
-        # 최근 종가 기준
         close = df['종가']
+        current_price = close.iloc[-1] # [중요] 현재가를 여기서 직접 계산
         
-        # 1. 52주 신고가 근처 (여기선 편의상 60일 고가 돌파로 근사 or 신고가 API 사용)
-        # 강력한 시세 분출 신호
+        # 1. 52주 신고가 근처 (최근 60일 최고가 기준 판단)
         recent_high = close.max()
-        if current_price >= recent_high * 0.98: # 고점 대비 -2% 이내
+        if current_price >= recent_high * 0.98:
             return "🔥신고가"
 
         # 이동평균선 계산
@@ -176,24 +177,20 @@ def get_chart_status(ticker: str, current_price: int) -> str:
         ma20 = close.rolling(window=20).mean().iloc[-1]
         ma60 = close.rolling(window=60).mean().iloc[-1]
 
-        # 2. 역배열 (하락 추세)
-        # 60일선 > 20일선 > 5일선 구조
+        # 2. 역배열 (60 > 20 > 5) - 바닥권 가능성
         if ma60 > ma20 > ma5:
             return "📉역배열"
 
-        # 3. 박스권 상단
-        # 신고가는 아니지만, 최근 60일 내 상위 10% 가격대에 위치
+        # 3. 박스권 상단 (최근 저점 대비 80% 이상 위치)
         recent_low = close.min()
-        position = (current_price - recent_low) / (recent_high - recent_low)
-        if position >= 0.8:
-            return "📦박스상단"
-        
-        # 4. 바닥권
-        # 하위 20% 가격대
-        if position <= 0.2:
-            return "💧바닥권"
+        if recent_high > recent_low:
+            pos = (current_price - recent_low) / (recent_high - recent_low)
+            if pos >= 0.8:
+                return "📦박스상단"
+            elif pos <= 0.2:
+                return "💧바닥권"
 
-        # 5. 정배열 (상승 추세 초입~진행)
+        # 4. 정배열
         if ma5 > ma20 > ma60:
             return "📈정배열"
 
