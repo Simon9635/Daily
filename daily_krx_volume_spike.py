@@ -145,27 +145,39 @@ def safe_int(n):
     except Exception:
         return 0
 
+# ---------- News Logic (수정됨) ----------
 def get_news_keyword(ticker: str) -> str:
     """네이버 금융 뉴스 제목에서 핵심 키워드(7자 이내) 추출"""
     try:
+        # 뉴스 리스트 iframe 전용 URL
         url = f"https://finance.naver.com/item/news_news.nhn?code={ticker}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        resp = requests.get(url, headers=headers, timeout=2) # 2초 타임아웃
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
+            'Referer': f'https://finance.naver.com/item/news.nhn?code={ticker}' # 차단 방지용 리퍼러 추가
+        }
+        
+        resp = requests.get(url, headers=headers, timeout=3)
+        
+        # HTML 파싱
         soup = BeautifulSoup(resp.content, "html.parser")
         
-        # 첫 번째 뉴스 제목 가져오기
-        item = soup.select_one(".type5 tbody tr .title a")
-        if not item: return ""
+        # [핵심 수정] ".type5 tbody tr .title a" -> ".type5 .title a"
+        # (원본 HTML에는 tbody가 없을 수 있으므로 생략하는 것이 안전합니다)
+        item = soup.select_one(".type5 .title a")
+        
+        if not item: 
+            return ""
         
         title = item.get_text().strip()
         
-        # [전처리] 괄호 및 불필요한 단어 제거
-        title = re.sub(r'\[.*?\]|\(.*?\)|\<.*?\>', '', title) # 대괄호,소괄호 제거
-        stop_words = ["특징주", "급등", "강세", "상승", "하락", "주가", "관련주", "영향", "부각", "소식", "체결", "::", "전일대비"]
+        # [전처리] 불필요한 기호/단어 제거
+        title = re.sub(r'\[.*?\]|\(.*?\)|\<.*?\>', '', title) 
+        stop_words = ["특징주", "급등", "강세", "상승", "하락", "주가", "관련주", "영향", "부각", "소식", "체결", "::", "전일대비", "오전", "오후"]
         for w in stop_words:
             title = title.replace(w, " ")
             
-        # [추출] 띄어쓰기 기준으로 단어를 합쳐서 7자 이내로 만들기
+        # [추출] 7자 이내로 키워드 조합
         keywords = ""
         for word in title.split():
             # 특수문자만 있는 단어 건너뛰기
@@ -173,12 +185,15 @@ def get_news_keyword(ticker: str) -> str:
             
             # 합쳤을 때 7자 넘으면 중단
             if len(keywords + word) > 7:
-                if not keywords: keywords = word[:6] + "." # 첫 단어가 길면 자름
+                if not keywords: keywords = word[:6] + "." 
                 break
             keywords += word + " "
             
         return keywords.strip()
-    except Exception:
+        
+    except Exception as e:
+        # 로컬 테스트 시 에러 확인용 (서버에서는 무시됨)
+        print(f"News scraping error for {ticker}: {e}")
         return ""
 
 # ---------- Build & send ----------
