@@ -145,55 +145,51 @@ def safe_int(n):
     except Exception:
         return 0
 
-# ---------- News Logic (수정됨) ----------
+# ---------- [업데이트 1] 뉴스 키워드 지능형 추출 ----------
 def get_news_keyword(ticker: str) -> str:
-    """네이버 금융 뉴스 제목에서 핵심 키워드(7자 이내) 추출"""
     try:
-        # 뉴스 리스트 iframe 전용 URL
         url = f"https://finance.naver.com/item/news_news.nhn?code={ticker}"
-        
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
-            'Referer': f'https://finance.naver.com/item/news.nhn?code={ticker}' # 차단 방지용 리퍼러 추가
+            'User-Agent': 'Mozilla/5.0',
+            'Referer': f'https://finance.naver.com/item/news.nhn?code={ticker}'
         }
-        
-        resp = requests.get(url, headers=headers, timeout=3)
-        
-        # HTML 파싱
+        resp = requests.get(url, headers=headers, timeout=2)
         soup = BeautifulSoup(resp.content, "html.parser")
         
-        # [핵심 수정] ".type5 tbody tr .title a" -> ".type5 .title a"
-        # (원본 HTML에는 tbody가 없을 수 있으므로 생략하는 것이 안전합니다)
+        # iframe 내 뉴스 리스트 선택자 (tbody 제거)
         item = soup.select_one(".type5 .title a")
-        
-        if not item: 
-            return ""
+        if not item: return ""
         
         title = item.get_text().strip()
         
-        # [전처리] 불필요한 기호/단어 제거
-        title = re.sub(r'\[.*?\]|\(.*?\)|\<.*?\>', '', title) 
-        stop_words = ["특징주", "급등", "강세", "상승", "하락", "주가", "관련주", "영향", "부각", "소식", "체결", "::", "전일대비", "오전", "오후"]
+        # 1. 말머리 및 괄호 제거
+        title = re.sub(r'\[.*?\]|\(.*?\)|\<.*?\>', '', title)
+        
+        # 2. 불필요한 단어(Stop words) 제거 리스트 업데이트
+        stop_words = [
+            "특징주", "급등", "강세", "상승", "하락", "급락", "주가", "관련주", "영향", "부각", 
+            "소식", "체결", "::", "전일대비", "오전", "오후", "장중", "마감", "속보", "공시", 
+            "발표", "분석", "전망", "실적", "최대", "개선", "회복", "우려", "기대", "감소", 
+            "증가", "돌파", "경신", "유입", "확대", "축소", "약세", "보합", "출발", "상위", 
+            "종목", "투자", "유치", "확보", "개발", "성공", "승인", "허가", "취득", "공급", 
+            "계약", "협력", "제휴", "진출", "본격화", "개시", "시작"
+        ]
         for w in stop_words:
             title = title.replace(w, " ")
-            
-        # [추출] 7자 이내로 키워드 조합
+
+        # 3. 핵심 단어만 남기기 (7자 제한)
         keywords = ""
         for word in title.split():
-            # 특수문자만 있는 단어 건너뛰기
-            if not any(c.isalnum() for c in word): continue
+            if not any(c.isalnum() for c in word): continue # 특수문자만 있으면 패스
             
-            # 합쳤을 때 7자 넘으면 중단
+            # 합쳤을 때 7자 넘어가면 중단
             if len(keywords + word) > 7:
-                if not keywords: keywords = word[:6] + "." 
+                if not keywords: keywords = word[:6] + "."
                 break
             keywords += word + " "
             
         return keywords.strip()
-        
-    except Exception as e:
-        # 로컬 테스트 시 에러 확인용 (서버에서는 무시됨)
-        print(f"News scraping error for {ticker}: {e}")
+    except Exception:
         return ""
 
 # ---------- Build & send ----------
@@ -280,8 +276,8 @@ def build_report():
     # ===== 고정 포맷 설정 =====
     num_field_width   = 3          # "1)" 영역
     NAME_WIDTH_UNITS  = 16         # ✅ 화면 표시폭 기준 16칸(한글 8글자까지 커버)
-    gap_na            = 4          # 종목명과 전일거래대금 사이 공백
-    amt_label         = "전일거래대금(억)"
+    gap_na            = 3          # 종목명과 전일거래대금 사이 공백
+    amt_label         = "거래대금(억)"
 
     def format_name(s: str) -> str:
         # 종목명은 최대 5글자까지만 사용 (그 이상은 잘라냄)
