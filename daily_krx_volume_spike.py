@@ -285,7 +285,7 @@ def build_report():
     W_NAME = 12   # 종목명 (넉넉하게 6글자 폭)
     W_AMT  = 10   # 거래대금 (1,234.5)
     W_CHART= 10   # 차트 (이모지 포함)
-    GAP    = "     "  # 투명한 줄(Separation) 역할 (공백 1칸)
+    GAP    = "    "  # 투명한 줄(Separation) 역할 (공백 1칸)
 
     # 1. 헤더 생성 (가운데 정렬 적용)
     h_rank = " " * W_RANK
