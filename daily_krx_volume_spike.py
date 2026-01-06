@@ -87,7 +87,7 @@ def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
         start_str = (target_date - dt.timedelta(days=14)).strftime("%Y%m%d")
         
         # pykrx를 이용해 삼성전자 일별 시세 조회
-        df = stock.get_market_ohlcv_by_date(start_start=start_str, end_date=end_str, ticker="005930")
+        df = stock.get_market_ohlcv_by_date(start_date=start_str, end_date=end_str, ticker="005930")
         
         # 데이터가 너무 적으면(최소 2일 필요) 실패 처리
         if df.empty or len(df) < 2:
