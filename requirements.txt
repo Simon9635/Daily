@@ -2,3 +2,4 @@ pykrx
 pandas
 requests
 beautifulsoup4
+finance-datareader
