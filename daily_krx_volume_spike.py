@@ -6,6 +6,7 @@ import html
 import datetime as dt
 from urllib import request, parse
 import unicodedata  # <--- 이 줄을 import 모여있는 곳에 추가해주세요
+import FinanceDataReader as fdr
 
 # --- [뉴스 크롤링 라이브러리] ---
 import requests
@@ -146,28 +147,29 @@ def safe_int(n):
     except Exception:
         return 0
 
-# [수정] 차트 위치 분석 함수 (입력값에서 current_price 제거함)
+# [수정됨] 차트 위치 분석 함수 (FinanceDataReader 사용으로 안정성 강화)
 def get_chart_status(ticker: str) -> str:
     """
-    최근 60일 데이터를 분석하여 차트 위치(신고가, 역배열 등) 반환
-    (내부에서 현재가를 직접 조회하도록 수정됨)
+    최근 60일 데이터를 분석하여 차트 위치 반환
+    (pykrx 에러 방지를 위해 FinanceDataReader 사용)
     """
     try:
-        # 오늘 기준 최근 120일 데이터 조회
+        # 오늘 기준 데이터 조회
         now = dt.datetime.now(KST)
-        today = now.strftime("%Y%m%d")
-        start_day = (now - dt.timedelta(days=120)).strftime("%Y%m%d")
+        today = now.strftime("%Y-%m-%d")
+        start_day = (now - dt.timedelta(days=120)).strftime("%Y-%m-%d")
         
-        # 일별 시세 조회
-        df = stock.get_market_ohlcv_by_date(start_day, today, ticker)
+        # FinanceDataReader는 컬럼이 영어(Close, Open...)로 나옵니다
+        df = fdr.DataReader(ticker, start=start_day, end=today)
         
         if df.empty or len(df) < 60:
             return "-" # 데이터 부족
 
-        close = df['종가']
-        current_price = close.iloc[-1] # [중요] 현재가를 여기서 직접 계산
+        # [중요] 영어 컬럼명 사용 ('Close' = '종가')
+        close = df['Close']
+        current_price = close.iloc[-1]
         
-        # 1. 52주 신고가 근처 (최근 60일 최고가 기준 판단)
+        # 1. 52주 신고가 근처 (최근 60일 최고가 기준)
         recent_high = close.max()
         if current_price >= recent_high * 0.98:
             return "🔥신고가"
@@ -177,11 +179,11 @@ def get_chart_status(ticker: str) -> str:
         ma20 = close.rolling(window=20).mean().iloc[-1]
         ma60 = close.rolling(window=60).mean().iloc[-1]
 
-        # 2. 역배열 (60 > 20 > 5) - 바닥권 가능성
+        # 2. 역배열 (60 > 20 > 5)
         if ma60 > ma20 > ma5:
             return "📉역배열"
 
-        # 3. 박스권 상단 (최근 저점 대비 80% 이상 위치)
+        # 3. 박스권 상단
         recent_low = close.min()
         if recent_high > recent_low:
             pos = (current_price - recent_low) / (recent_high - recent_low)
@@ -196,7 +198,9 @@ def get_chart_status(ticker: str) -> str:
 
         return "⚖️중립"
 
-    except Exception:
+    except Exception as e:
+        # 에러 발생 시 로그 출력 (디버깅용)
+        # print(f"Chart Error ({ticker}): {e}") 
         return "-"
 
 # ---------- Build & send ----------
