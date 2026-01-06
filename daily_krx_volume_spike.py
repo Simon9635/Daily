@@ -73,20 +73,45 @@ def _prev_weekday(d: dt.date) -> dt.date:
     return d
 
 def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
-    wd = now_kst.weekday()
-    if wd >= 5:
+    """
+    [수정됨] 휴장일(1월 1일, 명절 등)을 자동으로 건너뛰고
+    실제 '오늘(장 열린 날)'과 '직전 거래일'을 찾아냅니다.
+    """
+    try:
+        # 1. 오늘 날짜 구하기
+        target_date = now_kst.date()
+        
+        # 2. 넉넉하게 최근 2주(14일)치 주가 데이터를 조회 (삼성전자 코드 005930 이용)
+        # (개별 종목 데이터를 쓰는 이유는 가장 빠르고 정확하게 거래일을 알 수 있기 때문입니다)
+        end_str = target_date.strftime("%Y%m%d")
+        start_str = (target_date - dt.timedelta(days=14)).strftime("%Y%m%d")
+        
+        # pykrx를 이용해 삼성전자 일별 시세 조회
+        df = stock.get_market_ohlcv_by_date(start_start=start_str, end_date=end_str, ticker="005930")
+        
+        # 데이터가 너무 적으면(최소 2일 필요) 실패 처리
+        if df.empty or len(df) < 2:
+            return None, None
+            
+        # 3. 거래일 리스트 확보 (index가 날짜임)
+        valid_dates = df.index.tolist() # [..., 12월30일, 1월2일, 1월5일]
+        
+        # 4. '오늘'이 장이 열린 날인지 확인
+        # DB에서 가져온 가장 최근 날짜(last_biz_day)가 오늘(target_date)과 같은지 체크
+        last_biz_day = valid_dates[-1].date()
+        
+        if last_biz_day != target_date:
+            # 오늘은 주말이거나 공휴일이라 장이 안 열렸음 (또는 장 마감 전이라 데이터 없음)
+            return None, None
+            
+        # 5. 오늘(d1)과 바로 직전 거래일(d0) 리턴
+        d1 = valid_dates[-1].date() # 오늘
+        d0 = valid_dates[-2].date() # 직전 거래일 (어제가 휴일이면 그 전날이 됨)
+        
+        return d1, d0
+        
+    except Exception:
         return None, None
-    today = now_kst.date()
-    if wd == 0:
-        d1 = today - dt.timedelta(days=3)
-        d0 = today - dt.timedelta(days=4)
-    elif wd == 1:
-        d1 = today - dt.timedelta(days=1)
-        d0 = today - dt.timedelta(days=4)
-    else:
-        d1 = _prev_weekday(today)
-        d0 = _prev_weekday(d1)
-    return d1, d0
 
 def yyyymmdd(d: dt.date) -> str:
     return d.strftime("%Y%m%d")
