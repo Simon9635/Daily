@@ -6,12 +6,12 @@ import html
 import datetime as dt
 from urllib import request, parse
 import unicodedata  # <--- 이 줄을 import 모여있는 곳에 추가해주세요
-import FinanceDataReader as fdr
 
 # --- [뉴스 크롤링 라이브러리] ---
 import requests
 from bs4 import BeautifulSoup
 import re
+import FinanceDataReader as fdr
 
 # --- Telegram ENV ---
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
