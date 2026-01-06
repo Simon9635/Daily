@@ -72,52 +72,78 @@ def _prev_weekday(d: dt.date) -> dt.date:
         d -= dt.timedelta(days=1)
     return d
 
+#!/usr/bin/env python3
+# ... (위쪽 import 및 함수들은 기존과 동일하게 유지) ...
+
+# [수정] 로그를 출력하도록 변경된 날짜 계산 함수
 def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
-    """
-    [수정됨] 휴장일(1월 1일, 명절 등)을 자동으로 건너뛰고
-    실제 '오늘(장 열린 날)'과 '직전 거래일'을 찾아냅니다.
-    """
     try:
-        # 1. 오늘 날짜 구하기
         target_date = now_kst.date()
+        print(f"🔍 [디버깅] 오늘 날짜 확인: {target_date}")
         
-        # 2. 넉넉하게 최근 2주(14일)치 주가 데이터를 조회 (삼성전자 코드 005930 이용)
-        # (개별 종목 데이터를 쓰는 이유는 가장 빠르고 정확하게 거래일을 알 수 있기 때문입니다)
         end_str = target_date.strftime("%Y%m%d")
         start_str = (target_date - dt.timedelta(days=14)).strftime("%Y%m%d")
         
-        # pykrx를 이용해 삼성전자 일별 시세 조회
+        # 데이터 조회 시도
         df = stock.get_market_ohlcv_by_date(start_str, end_str, ticker="005930")
         
-        # 데이터가 너무 적으면(최소 2일 필요) 실패 처리
         if df.empty or len(df) < 2:
+            print("❌ [디버깅] 삼성전자 데이터 조회 실패 (비어있음)")
             return None, None
             
-        # 3. 거래일 리스트 확보 (index가 날짜임)
-        valid_dates = df.index.tolist() # [..., 12월30일, 1월2일, 1월5일]
-        
-        # 4. '오늘'이 장이 열린 날인지 확인
-        # DB에서 가져온 가장 최근 날짜(last_biz_day)가 오늘(target_date)과 같은지 체크
+        valid_dates = df.index.tolist()
         last_biz_day = valid_dates[-1].date()
+        print(f"🔍 [디버깅] DB상 가장 최근 거래일: {last_biz_day}")
         
         if last_biz_day != target_date:
-            # 오늘은 주말이거나 공휴일이라 장이 안 열렸음 (또는 장 마감 전이라 데이터 없음)
+            print(f"⛔ [디버깅] 오늘은 개장일이 아닙니다. (오늘: {target_date} != 최근거래일: {last_biz_day})")
+            # [중요] 장 마감 전(오후 3:30 이전)에 돌리면 데이터가 없어서 이쪽으로 빠질 수 있음
             return None, None
             
-        # 5. 오늘(d1)과 바로 직전 거래일(d0) 리턴
-        d1 = valid_dates[-1].date() # 오늘
-        d0 = valid_dates[-2].date() # 직전 거래일 (어제가 휴일이면 그 전날이 됨)
+        d1 = valid_dates[-1].date()
+        d0 = valid_dates[-2].date()
+        print(f"✅ [디버깅] 날짜 확정: 오늘({d1}) vs 어제({d0})")
         
         return d1, d0
         
-    except Exception:
+    except Exception as e:
+        print(f"❌ [디버깅] 날짜 계산 중 에러 발생: {e}")
         return None, None
 
-def yyyymmdd(d: dt.date) -> str:
-    return d.strftime("%Y%m%d")
+# ... (중간 함수들 동일) ...
 
-def yyyy_mm_dd(d: dt.date) -> str:
-    return d.strftime("%Y-%m-%d")
+# [수정] 메인 실행부 (로그 출력 추가)
+if __name__ == "__main__":
+    print("🚀 스크립트 시작")
+    
+    # 1. 토큰 확인
+    if not BOT_TOKEN or not CHAT_ID:
+        print("❌ [치명적 에러] Github Secrets(토큰)가 설정되지 않았습니다.")
+        sys.exit(1)
+    else:
+        print("✅ 토큰 감지됨 (보안상 숨김)")
+
+    try:
+        # 2. 리포트 생성 시도
+        print("📊 리포트 생성 중...")
+        msg = build_report()
+        
+        if msg is None:
+            print("⚠️ [결과] 생성된 메시지가 없습니다. (휴장일이거나 데이터 부족)")
+        else:
+            print("📨 [전송] 텔레그램 메시지 전송 시도...")
+            tg_send(msg)
+            print("✅ [완료] 전송 로직 수행됨")
+            
+    except Exception as e:
+        # 3. 에러 발생 시 봇으로 알림
+        err_msg = f"⚠️ 자동화 에러 발생: {e}"
+        print(err_msg)
+        try:
+            tg_send(err_msg)
+        except:
+            pass
+        sys.exit(1)
 
 # ---------- Data pulls ----------
 def get_trading_value_by_market(datestr: str, market: str) -> pd.DataFrame:
