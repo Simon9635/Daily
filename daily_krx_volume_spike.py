@@ -98,6 +98,12 @@ def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
     except Exception:
         return None, None
 
+def yyyymmdd(d: dt.date) -> str:
+    return d.strftime("%Y%m%d")
+
+def yyyy_mm_dd(d: dt.date) -> str:
+    return d.strftime("%Y-%m-%d")
+
 # ---------- 데이터 수집 (pykrx) ----------
 def get_trading_value_by_market(datestr: str, market: str) -> pd.DataFrame:
     try:
