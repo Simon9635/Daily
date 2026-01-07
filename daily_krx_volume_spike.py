@@ -54,8 +54,8 @@ def pick_compare_days(now_kst: dt.datetime) -> tuple:
         # [무조건] 가장 최근 마감일 2개 가져오기
         # (만약 오늘 장중이라면 오늘 데이터가 포함될 수 있음 -> 이 경우 오늘 vs 어제 비교됨)
         # (만약 아침이라면 어제 vs 그제 비교됨)
-        d1 = valid_dates[-1].date()
-        d0 = valid_dates[-2].date()
+        d1 = valid_dates[-2].date()
+        d0 = valid_dates[-3].date()
         
         return d1, d0
     except:
