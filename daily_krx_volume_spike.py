@@ -1,30 +1,36 @@
 #!/usr/bin/env python3
 import os
 import sys
+import time
 import json
 import html
 import datetime as dt
 from urllib import request, parse
-import unicodedata  # <--- 이 줄을 import 모여있는 곳에 추가해주세요
+import unicodedata
 
-# --- [뉴스 크롤링 라이브러리] ---
+# --- [필수 라이브러리] ---
 import requests
-from bs4 import BeautifulSoup
-import re
+import FinanceDataReader as fdr  # 차트 분석용
+from pykrx import stock          # 데이터 수집용
+import pandas as pd
 
 # --- Telegram ENV ---
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-
-from pykrx import stock
-import pandas as pd
+try:
+    BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+    CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+except KeyError:
+    BOT_TOKEN = ""
+    CHAT_ID = ""
 
 KST = dt.timezone(dt.timedelta(hours=9))
 TG_MAX = 4096
 
-# ---------- Telegram ----------
+# ---------- Telegram 전송 함수 ----------
 def tg_send(text: str):
-    """HTML 파싱 이슈/길이 초과를 방어하며 전송"""
+    if not BOT_TOKEN:
+        print("❌ [설정 오류] 봇 토큰이 없습니다.")
+        return
+    
     def _post(msg: str, parse_html: bool = True):
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {
@@ -38,63 +44,48 @@ def tg_send(text: str):
         req = request.Request(url, data=body, method="POST")
         try:
             with request.urlopen(req, timeout=30) as resp:
-                js = json.loads(resp.read().decode("utf-8"))
-                if not js.get("ok"):
-                    raise RuntimeError(f"Telegram API error: {js}")
+                json.loads(resp.read().decode("utf-8"))
         except Exception as e:
-            try:
-                desc = e.read().decode("utf-8", "ignore") if hasattr(e, "read") else str(e)
-            except Exception:
-                desc = str(e)
-            raise RuntimeError(f"Telegram sendMessage failed: {desc}") from e
+            print(f"❌ 전송 실패: {e}")
 
     if len(text) <= TG_MAX:
-        try:
-            _post(text, parse_html=True)
-        except RuntimeError:
-            _post(text, parse_html=False)
-        return
+        try: _post(text, True)
+        except: _post(text, False)
+    else:
+        for i in range(0, len(text), TG_MAX):
+            chunk = text[i:i+TG_MAX]
+            try: _post(chunk, True)
+            except: _post(chunk, False)
 
-    i = 0
-    while i < len(text):
-        chunk = text[i:i+TG_MAX]
-        try:
-            _post(chunk, parse_html=True)
-        except RuntimeError:
-            _post(chunk, parse_html=False)
-        i += TG_MAX
-
-# ---------- Date picking (평일만 / 월=금↔목, 화=월↔금) ----------
-def _prev_weekday(d: dt.date) -> dt.date:
-    d -= dt.timedelta(days=1)
-    while d.weekday() >= 5:  # Sat=5, Sun=6
-        d -= dt.timedelta(days=1)
-    return d
-
-def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
-    """
-    평일만 전송:
-      - Mon: (Fri, Thu)
-      - Tue: (Mon, Fri)
-      - Wed: (Tue, Mon)
-      - Thu: (Wed, Tue)
-      - Fri: (Thu, Wed)
-    주말이면 (None, None)
-    """
-    wd = now_kst.weekday()  # Mon=0 ... Sun=6
-    if wd >= 5:
+# ---------- [핵심 1] 날짜 자동 보정 ----------
+def pick_latest_valid_days() -> tuple[dt.date, dt.date]:
+    """시스템 시간이 2026년 등 미래여도, 실제 데이터가 있는 최신 날짜를 찾아냅니다."""
+    try:
+        now = dt.datetime.now(KST)
+        print(f"🖥️ [시스템 시간] {now.date()}")
+        
+        # 2024년부터 오늘까지 조회 (실제 데이터가 있는 날만 필터링됨)
+        start_str = "20240101"
+        end_str = now.strftime("%Y%m%d")
+        
+        print("🔎 유효한 거래일 데이터를 검색합니다...")
+        df = stock.get_market_ohlcv_by_date(start_str, end_str, ticker="005930")
+        
+        if df.empty or len(df) < 2:
+            print("❌ [오류] 조회 가능한 거래일이 없습니다.")
+            return None, None
+            
+        valid_dates = df.index.tolist()
+        
+        real_d1 = valid_dates[-1].date() # 최신일
+        real_d0 = valid_dates[-2].date() # 직전일
+        
+        print(f"✅ [날짜 확정] 최신일: {real_d1} (대조: {real_d0})")
+        return real_d1, real_d0
+        
+    except Exception as e:
+        print(f"❌ [날짜 분석 실패] {e}")
         return None, None
-    today = now_kst.date()
-    if wd == 0:  # Mon
-        d1 = today - dt.timedelta(days=3)  # Fri
-        d0 = today - dt.timedelta(days=4)  # Thu
-    elif wd == 1:  # Tue
-        d1 = today - dt.timedelta(days=1)  # Mon
-        d0 = today - dt.timedelta(days=4)  # Fri
-    else:  # Wed~Fri
-        d1 = _prev_weekday(today)
-        d0 = _prev_weekday(d1)
-    return d1, d0
 
 def yyyymmdd(d: dt.date) -> str:
     return d.strftime("%Y%m%d")
@@ -102,241 +93,217 @@ def yyyymmdd(d: dt.date) -> str:
 def yyyy_mm_dd(d: dt.date) -> str:
     return d.strftime("%Y-%m-%d")
 
-# ---------- Data pulls ----------
-def get_trading_value_by_market(datestr: str, market: str) -> pd.DataFrame:
+# ---------- [핵심 2] 데이터 수집 통합 및 에러 방어 ----------
+def get_market_data(datestr: str, market: str) -> pd.DataFrame:
     """
-    해당일/시장 티커별 '거래대금'을 반환하는 테이블.
-    pykrx get_market_ohlcv_by_ticker에서 '거래대금' 컬럼 사용.
+    기존의 불안정한 함수들을 하나로 통합했습니다.
+    'Index... columns' 에러를 방지하기 위해 컬럼명을 체크하고 변환합니다.
     """
-    df = stock.get_market_ohlcv_by_ticker(datestr, market=market)
-    if df is None or len(df) == 0:
-        return pd.DataFrame(columns=["티커", "거래대금", "시장"])
-    df = df.reset_index()
-    val_col = "거래대금" if "거래대금" in df.columns else next(
-        (c for c in df.columns if "대금" in c), None
-    )
-    if not val_col:
-        return pd.DataFrame(columns=["티커", "거래대금", "시장"])
-    out = df[["티커", val_col]].copy()
-    out.rename(columns={val_col: "거래대금"}, inplace=True)
-    out["거래대금"] = pd.to_numeric(out["거래대금"], errors="coerce")
-    out.dropna(subset=["거래대금"], inplace=True)
-    out["거래대금"] = out["거래대금"].astype("int64")
-    out["시장"] = market
-    return out
+    max_retries = 3
+    for i in range(max_retries):
+        try:
+            time.sleep(1) # 차단 방지
+            
+            # 1. 데이터 가져오기 (시가총액 API 사용이 더 안정적)
+            df = stock.get_market_cap_by_ticker(datestr, market=market)
+            
+            # 2. 데이터가 텅 비었는지 확인 (여기서 에러 차단!)
+            if df is None or df.empty:
+                raise ValueError("빈 데이터프레임이 반환되었습니다.")
 
-def get_mcap_by_market(datestr: str, market: str) -> pd.DataFrame:
-    """해당일/시장 티커별 시가총액"""
-    df = stock.get_market_cap_by_ticker(datestr, market=market)
-    if df is None or len(df) == 0:
-        return pd.DataFrame(columns=["티커", "시가총액"])
-    df = df.reset_index()
-    cap_col = "시가총액" if "시가총액" in df.columns else next((c for c in df.columns if "총액" in c), None)
-    if not cap_col:
-        return pd.DataFrame(columns=["티커", "시가총액"])
-    out = df[["티커", cap_col]].copy()
-    out.rename(columns={cap_col: "시가총액"}, inplace=True)
-    out["시가총액"] = pd.to_numeric(out["시가총액"], errors="coerce")
-    out.dropna(subset=["시가총액"], inplace=True)
-    return out
+            df = df.reset_index()
+            
+            # 3. 영어 컬럼명일 경우 한글로 매핑 (fdr 호환성)
+            rename_map = {
+                'Close': '종가', 'Open': '시가', 'High': '고가', 'Low': '저가',
+                'Volume': '거래량', 'Amount': '거래대금', 'Marcap': '시가총액',
+                'Code': '티커', 'Symbol': '티커', 'Stocks': '상장주식수'
+            }
+            df = df.rename(columns=rename_map)
+            
+            cols = df.columns
+            
+            # 4. '거래대금' 컬럼 찾기 (이름이 다양할 수 있음)
+            val_col = next((c for c in cols if "대금" in c or "거래금액" in c), None)
+            
+            if not val_col:
+                # 컬럼이 없으면 에러 발생시키고 재시도
+                raise ValueError(f"거래대금 컬럼 부재. (발견된 컬럼: {list(cols)})")
 
-def safe_int(n):
-    try:
-        return int(n)
-    except Exception:
-        return 0
+            # 5. 필요한 컬럼만 추출
+            out = df[["티커", val_col]].copy()
+            out.rename(columns={val_col: "거래대금"}, inplace=True)
+            
+            # 시가총액도 있으면 가져오기
+            cap_col = next((c for c in cols if "총액" in c), None)
+            if cap_col:
+                out["시가총액"] = df[cap_col]
+            else:
+                out["시가총액"] = 0
+            
+            # 숫자형 변환
+            out["거래대금"] = pd.to_numeric(out["거래대금"], errors="coerce").fillna(0).astype("int64")
+            out["시가총액"] = pd.to_numeric(out["시가총액"], errors="coerce").fillna(0).astype("int64")
+            
+            return out
 
-# [수정] 차트 위치 분석 함수 (입력값에서 current_price 제거함)
+        except Exception as e:
+            print(f"⚠️ [재시도 {i+1}] {market} {datestr} 읽기 이슈: {e}")
+            time.sleep(2)
+            
+    print(f"❌ [최종 실패] {market} {datestr} 데이터를 가져오지 못했습니다.")
+    return pd.DataFrame(columns=["티커", "거래대금", "시가총액"])
+
+# ---------- 차트 분석 ----------
 def get_chart_status(ticker: str) -> str:
-    """
-    최근 60일 데이터를 분석하여 차트 위치(신고가, 역배열 등) 반환
-    (내부에서 현재가를 직접 조회하도록 수정됨)
-    """
     try:
-        # 오늘 기준 최근 120일 데이터 조회
         now = dt.datetime.now(KST)
-        today = now.strftime("%Y%m%d")
-        start_day = (now - dt.timedelta(days=120)).strftime("%Y%m%d")
+        today_str = now.strftime("%Y-%m-%d")
+        start_str = (now - dt.timedelta(days=120)).strftime("%Y-%m-%d")
         
-        # 일별 시세 조회
-        df = stock.get_market_ohlcv_by_date(start_day, today, ticker)
-        
+        df = fdr.DataReader(ticker, start=start_str, end=today_str)
         if df.empty or len(df) < 60:
-            return "-" # 데이터 부족
+            return "-"
 
-        close = df['종가']
-        current_price = close.iloc[-1] # [중요] 현재가를 여기서 직접 계산
+        close = df['Close']
+        curr = close.iloc[-1]
+        recent_high = close.tail(60).max()
         
-        # 1. 52주 신고가 근처 (최근 60일 최고가 기준 판단)
-        recent_high = close.max()
-        if current_price >= recent_high * 0.98:
-            return "🔥신고가"
+        if curr >= recent_high * 0.98: return "🔥신고가"
 
-        # 이동평균선 계산
-        ma5 = close.rolling(window=5).mean().iloc[-1]
-        ma20 = close.rolling(window=20).mean().iloc[-1]
-        ma60 = close.rolling(window=60).mean().iloc[-1]
+        ma5 = close.rolling(5).mean().iloc[-1]
+        ma20 = close.rolling(20).mean().iloc[-1]
+        ma60 = close.rolling(60).mean().iloc[-1]
 
-        # 2. 역배열 (60 > 20 > 5) - 바닥권 가능성
-        if ma60 > ma20 > ma5:
-            return "📉역배열"
+        if ma60 > ma20 > ma5: return "📉역배열"
 
-        # 3. 박스권 상단 (최근 저점 대비 80% 이상 위치)
-        recent_low = close.min()
+        recent_low = close.tail(60).min()
         if recent_high > recent_low:
-            pos = (current_price - recent_low) / (recent_high - recent_low)
-            if pos >= 0.8:
-                return "📦박스상단"
-            elif pos <= 0.2:
-                return "💧바닥권"
+            pos = (curr - recent_low) / (recent_high - recent_low)
+            if pos >= 0.8: return "📦박스상단"
+            elif pos <= 0.2: return "💧바닥권"
 
-        # 4. 정배열
-        if ma5 > ma20 > ma60:
-            return "📈정배열"
+        if ma5 > ma20 > ma60: return "📈정배열"
 
         return "⚖️중립"
-
-    except Exception:
+    except:
         return "-"
 
-# ---------- Build & send ----------
+# ---------- 리포트 생성 ----------
 def build_report():
-    import unicodedata, html
+    import unicodedata
 
-    # ---- 한글 2칸 폭 고려한 표시폭 계산 ----
     def disp_width(s: str) -> int:
-        w = 0
-        for ch in s:
-            # W/F = wide/fullwidth → 2칸, 나머지 1칸
-            w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
-        return w
+        return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
 
-    def ljust_display(s: str, width_units: int) -> str:
-        """표시폭(width_units 기준) 만큼 좌측 정렬 + 공백 패딩."""
-        cur = disp_width(s)
-        pad = max(0, width_units - cur)
-        return s + (" " * pad)
+    def center_align(s: str, width: int) -> str:
+        s_len = disp_width(s)
+        if s_len >= width: return s
+        left_pad = (width - s_len) // 2
+        right_pad = width - s_len - left_pad
+        return " " * left_pad + s + " " * right_pad
 
-    now = dt.datetime.now(KST)
-    d1_date, d0_date = pick_compare_days(now)
+    # 1. 날짜 선정 (자동 보정)
+    d1_date, d0_date = pick_latest_valid_days()
+    
     if d1_date is None:
-        return None  # 주말은 스킵
+        return None
 
-    d1_str, d0_str = yyyymmdd(d1_date), yyyymmdd(d0_date)
+    d1_str = yyyymmdd(d1_date)
+    d0_str = yyyymmdd(d0_date)
 
-    # --- 거래대금 / 시총 수집 (KOSPI + KOSDAQ) ---
-    vals_d1, vals_d0, caps_d1 = [], [], []
+    print(f"⏳ 데이터 수집 시작 ({d1_str} vs {d0_str})...")
+    
+    # 여기서 새로운 함수 사용!
+    dfs_1, dfs_0 = [], []
     for mkt in ["KOSPI", "KOSDAQ"]:
-        vals_d1.append(get_trading_value_by_market(d1_str, mkt))
-        vals_d0.append(get_trading_value_by_market(d0_str, mkt))
-        caps_d1.append(get_mcap_by_market(d1_str, mkt))
+        dfs_1.append(get_market_data(d1_str, mkt))
+        dfs_0.append(get_market_data(d0_str, mkt))
 
-    val1 = pd.concat(vals_d1, ignore_index=True) if vals_d1 else pd.DataFrame(columns=["티커", "거래대금", "시장"])
-    val0 = pd.concat(vals_d0, ignore_index=True) if vals_d0 else pd.DataFrame(columns=["티커", "거래대금", "시장"])
-    mcap = pd.concat(caps_d1, ignore_index=True) if caps_d1 else pd.DataFrame(columns=["티커", "시가총액"])
+    df_1 = pd.concat(dfs_1, ignore_index=True)
+    df_0 = pd.concat(dfs_0, ignore_index=True)
 
-    # --- 전일/전전일 거래대금 5배 필터 ---
-    merged = pd.merge(val1, val0, on=["티커"], how="inner", suffixes=("_전일", "_전전일"))
-    for col in ["거래대금_전일", "거래대금_전전일"]:
-        merged[col] = pd.to_numeric(merged[col], errors="coerce")
-    merged = merged.dropna(subset=["거래대금_전일", "거래대금_전전일"])
-    merged = merged[merged["거래대금_전전일"] > 0]
-    merged["배수"] = (merged["거래대금_전일"] / merged["거래대금_전전일"]).round(2)
+    if df_1.empty or df_0.empty:
+        print("❌ [중단] 데이터 수집 실패")
+        return None
 
-    result = merged[merged["배수"] >= 5].copy()
+    # 데이터 병합
+    df_1_sub = df_1[["티커", "거래대금", "시가총액"]]
+    df_0_sub = df_0[["티커", "거래대금"]]
+    
+    merged = pd.merge(df_1_sub, df_0_sub, on="티커", how="inner", suffixes=("_1", "_0"))
+    
+    # [필터링]
+    merged = merged[merged["거래대금_0"] > 0]
+    merged["배수"] = merged["거래대금_1"] / merged["거래대금_0"]
+    
+    target = merged[merged["배수"] >= 5.0].copy()
+    print(f"📊 조건 만족 종목: {len(target)}개")
 
-    # --- 시총 기준 정렬 → 상위 30개 ---
-    result = pd.merge(result, mcap, on="티커", how="left")
-    result["시가총액"] = pd.to_numeric(result["시가총액"], errors="coerce").fillna(0)
-    result.sort_values(by=["시가총액", "거래대금_전일"], ascending=[False, False], inplace=True)
-    result = result.head(30).reset_index(drop=True)
+    # 정렬
+    target = target.sort_values(by="거래대금_1", ascending=False).head(30)
 
-    # --- 종목명 매핑 ---
-    name_map = {}
-    for t in result["티커"].tolist():
-        try:
-            name_map[t] = stock.get_market_ticker_name(t)
-        except Exception:
-            name_map[t] = ""
-    result["종목명"] = result["티커"].map(name_map)
+    # 포맷팅
+    names = []
+    tickers = target["티커"].tolist()
+    for t in tickers:
+        try: names.append(stock.get_market_ticker_name(t))
+        except: names.append(t)
 
-    # ---- 거래대금 억 단위(소수 1자리)로 변환 ----
     amts = []
-    for v in result["거래대금_전일"].tolist():
-        v_krw = int(v)
-        v_eok = v_krw / 100_000_000  # 원 → 억
-        amts.append(f"{v_eok:,.1f}")
+    for val in target["거래대금_1"].tolist():
+        amts.append(f"{val/100000000:,.1f}")
 
-    names = [str(x or "") for x in result["종목명"].tolist()]
-
-    # ===== 메시지 헤더 =====
+    # 메시지 작성
     header = (
         f"[SK증권]\n"
-        f"안녕하십니까 sk 김수민입니다\n"
-        f"<b>전일거래대금 급증 종목 공유드립니다!</b>\n"
+        f"안녕하십니까 \n"
+        f"sk 김수민입니다\n"
+        f"전일거래대금 급증 종목 공유드립니다!\n"
         f"[기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}]\n"
     )
 
-    if len(result) == 0:
-        return header + "\n해당 없음."
+    if target.empty:
+        return header + "\n(조건 만족 종목 없음)"
 
-    # ===== 고정 포맷 설정 =====
-    num_field_width   = 3          # "1)" 영역
-    NAME_WIDTH_UNITS  = 16         # ✅ 화면 표시폭 기준 16칸(한글 8글자까지 커버)
-    gap_na            = 3          # 종목명과 전일거래대금 사이 공백
-    amt_label         = "거래대금(억)"
+    W_NUM = 3; W_NAME = 12; W_AMT = 12; W_CHART = 10; GAP = "   "
 
-    def format_name(s: str) -> str:
-        # 종목명은 최대 5글자까지만 사용 (그 이상은 잘라냄)
-        s_trunc = s[:5]
-        # 표시폭 기준 16칸이 되도록 공백 패딩
-        return ljust_display(s_trunc, NAME_WIDTH_UNITS)
-
-    # === [수정됨] 티커 리스트 가져오기 ===
-    tickers = result["티커"].tolist() 
-
-    # ─ 라벨 라인: 종목명 / 대금 / 재료 ─
-    lead = " " * (num_field_width + 1)
-    name_label_cell = format_name("종목명")
-
-    # 차트 칼럼 목표 너비: 10칸 (이모지+글자 고려)
-    CHART_WIDTH = 10 
-    header_chart = ljust_display("차트", CHART_WIDTH).replace("차트", "   차트")
-
-    # 헤더에 '재료' 추가
-    label_line_plain = f"{lead}{name_label_cell}{' ' * gap_na}{amt_label} {'차트'}"
-    lines = [f"<code>{html.escape(label_line_plain)}</code>"]
-
-# ─ 데이터 라인 수정 (for문 교체) ─
-    for i, (nm, av, t_code) in enumerate(zip(names, amts, tickers), start=1):
-        num_cell  = f"{str(i) + ')':<{num_field_width}}"
-        name_cell = format_name(nm)
-        
-        # 1. 차트 상태 분석 (함수 호출)
-        status = get_chart_status(t_code)
-        
-        # 2. [오른쪽 정렬] 차트 상태 패딩 계산
-        # (목표 너비 - 실제 글자 너비) 만큼 왼쪽에 공백을 채움
-        pad_len = max(0, CHART_WIDTH - disp_width(status))
-        padding = " " * pad_len
-        
-        # 3. 한 줄 완성 (전부 Code Block 안에 넣어서 정렬 유지)
-        line_fixed = f"{num_cell} {name_cell}{' ' * gap_na}{av}   {padding}{status}"
-        
-        lines.append(f"<code>{html.escape(line_fixed)}</code>")
-
-    return header + "\n" + "\n".join(lines)
+    h_line = (
+        f"{' '*W_NUM}{GAP}"
+        f"{center_align('종목', W_NAME)}{GAP}"
+        f"{center_align('거래대금(억)', W_AMT)}{GAP}"
+        f"{center_align('차트', W_CHART)}"
+    )
     
+    lines = []
+    lines.append(f"<code>{html.escape(h_line)}</code>")
+    lines.append("-" * 48)
+
+    for i, (nm, av, t_code) in enumerate(zip(names, amts, tickers), 1):
+        rank_s = f"{str(i)+')':<{W_NUM}}"
+        name_s = center_align(nm[:5], W_NAME)
+        amt_s = center_align(av, W_AMT)
+        stat = get_chart_status(t_code)
+        chart_s = center_align(stat, W_CHART)
+
+        row = f"{rank_s}{GAP}{name_s}{GAP}{amt_s}{GAP}{chart_s}"
+        lines.append(f"<code>{html.escape(row)}</code>")
+
+    return header + "\n".join(lines)
+
+# ---------- 실행부 ----------
 if __name__ == "__main__":
+    print("🚀 스크립트 실행 시작")
+    
     try:
         msg = build_report()
-        if msg is not None:
+        if msg:
+            print("📨 메시지 전송 시도...")
             tg_send(msg)
+            print("✅ 전송 완료")
+        else:
+            print("⚠️ 보낼 메시지가 없습니다.")
     except Exception as e:
-        try:
-            tg_send(f"⚠️ 자동화 에러: {e}")
-        except Exception:
-            pass
-        sys.stderr.write(f"ERROR: {e}\n")
+        print(f"❌ [치명적 에러] {e}")
         sys.exit(1)
 
