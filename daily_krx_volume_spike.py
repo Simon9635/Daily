@@ -105,57 +105,39 @@ def yyyy_mm_dd(d: dt.date) -> str:
 
 # ---------- [핵심 수정] 데이터 수집 통합 함수 ----------
 def get_market_data(datestr: str, market: str) -> pd.DataFrame:
-    """
-    pykrx 안정화 버전:
-    - market 파라미터 사용 ❌
-    - 전체 시장 조회 후 KOSPI/KOSDAQ 필터링 ✅
-    """
     max_retries = 3
 
     for i in range(max_retries):
         try:
             time.sleep(1)
 
-            # 🔑 핵심: market 파라미터 제거
-            df = stock.get_market_cap_by_ticker(datestr)
+            df = stock.get_market_cap_by_ticker(datestr, market=market)
 
             if df is None or df.empty:
-                raise ValueError("빈 데이터")
+                raise ValueError("빈 데이터 (휴장일 또는 미래 날짜 가능)")
 
             df = df.reset_index()
 
-            # ---- 컬럼 정규화 ----
-            rename_map = {}
-            for c in df.columns:
-                if "거래대금" in c:
-                    rename_map[c] = "거래대금"
-                elif "시가총액" in c:
-                    rename_map[c] = "시가총액"
+            # 필수 컬럼 확인
+            required_cols = ["티커", "종가", "거래량", "시가총액"]
+            missing = [c for c in required_cols if c not in df.columns]
+            if missing:
+                raise ValueError(f"컬럼 누락: {missing}")
 
-            df = df.rename(columns=rename_map)
+            out = df[required_cols].copy()
 
-            required = {"티커", "거래대금", "시가총액"}
-            if not required.issubset(df.columns):
-                raise ValueError(f"필수 컬럼 누락: {df.columns.tolist()}")
+            # 숫자형 변환
+            for c in ["종가", "거래량", "시가총액"]:
+                out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
 
-            # ---- 시장 필터링 (여기서 KOSPI / KOSDAQ 구분) ----
-            market_map = {
-                "KOSPI": stock.get_market_ticker_list(datestr, market="KOSPI"),
-                "KOSDAQ": stock.get_market_ticker_list(datestr, market="KOSDAQ"),
-            }
+            # 거래대금 직접 계산
+            out["거래대금"] = out["종가"] * out["거래량"]
 
-            tickers = set(market_map.get(market, []))
-            df = df[df["티커"].isin(tickers)]
+            # 👉 억원 단위 변환
+            out["거래대금"] = (out["거래대금"] / 1e8).round(1)
+            out["시가총액"] = (out["시가총액"] / 1e8).round(1)
 
-            if df.empty:
-                raise ValueError("시장 필터 후 데이터 없음")
-
-            out = df[["티커", "거래대금", "시가총액"]].copy()
-
-            out["거래대금"] = pd.to_numeric(out["거래대금"], errors="coerce").fillna(0).astype("int64")
-            out["시가총액"] = pd.to_numeric(out["시가총액"], errors="coerce").fillna(0).astype("int64")
-
-            return out
+            return out[["티커", "거래대금", "시가총액"]]
 
         except Exception as e:
             print(f"⚠️ [재시도 {i+1}/{max_retries}] {market} {datestr} 수집 실패: {e}")
@@ -163,6 +145,7 @@ def get_market_data(datestr: str, market: str) -> pd.DataFrame:
 
     print(f"❌ 최종 실패: {market} {datestr}")
     return pd.DataFrame(columns=["티커", "거래대금", "시가총액"])
+
 
 
 
