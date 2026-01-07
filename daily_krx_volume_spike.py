@@ -106,56 +106,54 @@ def yyyy_mm_dd(d: dt.date) -> str:
 # ---------- [핵심 수정] 데이터 수집 통합 함수 ----------
 def get_market_data(datestr: str, market: str) -> pd.DataFrame:
     """
-    get_market_cap_by_ticker 기반
-    거래대금 / 시가총액을 안정적으로 수집
+    pykrx 안정화 버전:
+    - market 파라미터 사용 ❌
+    - 전체 시장 조회 후 KOSPI/KOSDAQ 필터링 ✅
     """
     max_retries = 3
 
     for i in range(max_retries):
         try:
-            time.sleep(1)  # 연속 호출 방지
+            time.sleep(1)
 
-            df = stock.get_market_cap_by_ticker(datestr, market=market)
+            # 🔑 핵심: market 파라미터 제거
+            df = stock.get_market_cap_by_ticker(datestr)
 
             if df is None or df.empty:
                 raise ValueError("빈 데이터")
 
             df = df.reset_index()
 
-            cols = df.columns.tolist()
+            # ---- 컬럼 정규화 ----
+            rename_map = {}
+            for c in df.columns:
+                if "거래대금" in c:
+                    rename_map[c] = "거래대금"
+                elif "시가총액" in c:
+                    rename_map[c] = "시가총액"
 
-            # ---- 컬럼 후보 정의 ----
-            val_candidates = ["거래대금", "거래대금(원)", "거래금액"]
-            cap_candidates = ["시가총액", "시가총액(원)", "시총"]
+            df = df.rename(columns=rename_map)
 
-            val_col = next((c for c in val_candidates if c in cols), None)
-            cap_col = next((c for c in cap_candidates if c in cols), None)
+            required = {"티커", "거래대금", "시가총액"}
+            if not required.issubset(df.columns):
+                raise ValueError(f"필수 컬럼 누락: {df.columns.tolist()}")
 
-            if not val_col or not cap_col:
-                raise ValueError(
-                    f"필수 컬럼 누락 | columns={cols}"
-                )
+            # ---- 시장 필터링 (여기서 KOSPI / KOSDAQ 구분) ----
+            market_map = {
+                "KOSPI": stock.get_market_ticker_list(datestr, market="KOSPI"),
+                "KOSDAQ": stock.get_market_ticker_list(datestr, market="KOSDAQ"),
+            }
 
-            out = df[["티커", val_col, cap_col]].copy()
-            out.rename(
-                columns={
-                    val_col: "거래대금",
-                    cap_col: "시가총액",
-                },
-                inplace=True
-            )
+            tickers = set(market_map.get(market, []))
+            df = df[df["티커"].isin(tickers)]
 
-            # 숫자형 변환 (안전)
-            out["거래대금"] = (
-                pd.to_numeric(out["거래대금"], errors="coerce")
-                .fillna(0)
-                .astype("int64")
-            )
-            out["시가총액"] = (
-                pd.to_numeric(out["시가총액"], errors="coerce")
-                .fillna(0)
-                .astype("int64")
-            )
+            if df.empty:
+                raise ValueError("시장 필터 후 데이터 없음")
+
+            out = df[["티커", "거래대금", "시가총액"]].copy()
+
+            out["거래대금"] = pd.to_numeric(out["거래대금"], errors="coerce").fillna(0).astype("int64")
+            out["시가총액"] = pd.to_numeric(out["시가총액"], errors="coerce").fillna(0).astype("int64")
 
             return out
 
@@ -165,6 +163,7 @@ def get_market_data(datestr: str, market: str) -> pd.DataFrame:
 
     print(f"❌ 최종 실패: {market} {datestr}")
     return pd.DataFrame(columns=["티커", "거래대금", "시가총액"])
+
 
 
 # ---------- 차트 분석 ----------
