@@ -83,8 +83,8 @@ def pick_latest_valid_days() -> tuple[dt.date, dt.date]:
         valid_dates = df.index.tolist()
         
         # 가장 마지막 날짜 = 진짜 최신 거래일
-        real_d1 = valid_dates[-1].date() # 최신일
-        real_d0 = valid_dates[-2].date() # 직전일
+        real_d1 = valid_dates[-2].date() # 최신일
+        real_d0 = valid_dates[-3].date() # 직전일
         
         print(f"✅ [날짜 확정] 데이터가 있는 최신일: {real_d1} (대조: {real_d0})")
         return real_d1, real_d0
