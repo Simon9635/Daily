@@ -181,97 +181,122 @@ def get_chart_status(ticker: str) -> str:
 def build_report():
     import unicodedata, html
 
+    # [1] 글자 폭 계산 함수 (한글=2칸, 영어/숫자=1칸)
     def disp_width(s: str) -> int:
         return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
 
+    # [2] 가운데 정렬 함수 (핵심)
     def center_align(s: str, width: int) -> str:
         s_len = disp_width(s)
-        if s_len >= width: return s
+        if s_len >= width:
+            return s
         left_pad = (width - s_len) // 2
         right_pad = width - s_len - left_pad
         return " " * left_pad + s + " " * right_pad
 
     now = dt.datetime.now(KST)
     d1_date, d0_date = pick_compare_days(now)
-    
     if d1_date is None:
-        return None
+        return None  # 주말 스킵
 
-    d1_str = yyyymmdd(d1_date)
-    d0_str = yyyymmdd(d0_date)
+    d1_str, d0_str = yyyymmdd(d1_date), yyyymmdd(d0_date)
 
-    print("⏳ 데이터 수집 중...")
-    dfs_v1, dfs_v0, dfs_cap = [], [], []
+    # --- 데이터 수집 ---
+    vals_d1, vals_d0, caps_d1 = [], [], []
     for mkt in ["KOSPI", "KOSDAQ"]:
-        dfs_v1.append(get_trading_value_by_market(d1_str, mkt))
-        dfs_v0.append(get_trading_value_by_market(d0_str, mkt))
-        dfs_cap.append(get_mcap_by_market(d1_str, mkt))
+        vals_d1.append(get_trading_value_by_market(d1_str, mkt))
+        vals_d0.append(get_trading_value_by_market(d0_str, mkt))
+        caps_d1.append(get_mcap_by_market(d1_str, mkt))
 
-    v1 = pd.concat(dfs_v1, ignore_index=True)
-    v0 = pd.concat(dfs_v0, ignore_index=True)
-    cap = pd.concat(dfs_cap, ignore_index=True)
+    val1 = pd.concat(vals_d1, ignore_index=True) if vals_d1 else pd.DataFrame(columns=["티커", "거래대금", "시장"])
+    val0 = pd.concat(vals_d0, ignore_index=True) if vals_d0 else pd.DataFrame(columns=["티커", "거래대금", "시장"])
+    mcap = pd.concat(caps_d1, ignore_index=True) if caps_d1 else pd.DataFrame(columns=["티커", "시가총액"])
 
-    if v1.empty or v0.empty:
-        print("❌ [데이터 오류] 해당 날짜의 거래대금 데이터를 가져오지 못했습니다.")
-        return None
+    # --- 필터링 (5배 급증) ---
+    merged = pd.merge(val1, val0, on=["티커"], how="inner", suffixes=("_전일", "_전전일"))
+    for col in ["거래대금_전일", "거래대금_전전일"]:
+        merged[col] = pd.to_numeric(merged[col], errors="coerce")
+    merged = merged.dropna(subset=["거래대금_전일", "거래대금_전전일"])
+    merged = merged[merged["거래대금_전전일"] > 0]
+    merged["배수"] = (merged["거래대금_전일"] / merged["거래대금_전전일"]).round(2)
 
-    # [필터링]
-    merged = pd.merge(v1, v0, on="티커", how="inner", suffixes=("_1", "_0"))
-    merged = merged[merged["거래대금_0"] > 0]
-    merged["배수"] = merged["거래대금_1"] / merged["거래대금_0"]
-    
-    target = merged[merged["배수"] >= 5.0].copy()
-    print(f"📊 1차 필터링 완료: {len(target)}개 종목 발견")
+    result = merged[merged["배수"] >= 5].copy()
 
-    target = pd.merge(target, cap, on="티커", how="left").fillna(0)
-    target = target.sort_values(by="거래대금_1", ascending=False).head(30)
+    # --- 정렬 및 상위 30개 ---
+    result = pd.merge(result, mcap, on="티커", how="left")
+    result["시가총액"] = pd.to_numeric(result["시가총액"], errors="coerce").fillna(0)
+    result.sort_values(by=["시가총액", "거래대금_전일"], ascending=[False, False], inplace=True)
+    result = result.head(30).reset_index(drop=True)
 
-    # 포맷팅
-    names = []
-    tickers = target["티커"].tolist()
-    for t in tickers:
-        try: names.append(stock.get_market_ticker_name(t))
-        except: names.append("-")
+    # --- 종목명 매핑 ---
+    name_map = {}
+    for t in result["티커"].tolist():
+        try:
+            name_map[t] = stock.get_market_ticker_name(t)
+        except Exception:
+            name_map[t] = ""
+    result["종목명"] = result["티커"].map(name_map)
 
+    # ---- 거래대금 변환 ----
     amts = []
-    for val in target["거래대금_1"].tolist():
-        amts.append(f"{val/100000000:,.1f}")
+    for v in result["거래대금_전일"].tolist():
+        v_eok = int(v) / 100_000_000
+        amts.append(f"{v_eok:,.1f}")
 
+    names = [str(x or "") for x in result["종목명"].tolist()]
+    tickers = result["티커"].tolist()
+
+    # ===== 메시지 헤더 =====
     header = (
         f"[SK증권]\n"
-        f"안녕하십니까 \n"
-        f"sk 김수민입니다\n"
-        f"전일거래대금 급증 종목 공유드립니다!\n"
+        f"안녕하십니까 sk 김수민입니다\n"
+        f"<b>전일거래대금 급증 종목 공유드립니다!</b>\n"
         f"[기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}]\n"
     )
 
-    if target.empty:
-        return header + "\n(조건 만족 종목 없음)"
+    if len(result) == 0:
+        return header + "\n해당 없음."
 
-    W_NUM = 3; W_NAME = 12; W_AMT = 12; W_CHART = 10; GAP = "   "
+    # ===== [설정] 테이블 칼럼 너비 및 간격 (가운데 정렬용) =====
+    # 전체 모양: [순위(3)] [공백] [종목(10)] [공백] [대금(9)] [공백] [차트(10)]
+    W_RANK = 3    # "1) "
+    W_NAME = 12   # 종목명 (넉넉하게 6글자 폭)
+    W_AMT  = 10   # 거래대금 (1,234.5)
+    W_CHART= 10   # 차트 (이모지 포함)
+    GAP    = " "  # 투명한 줄(Separation) 역할 (공백 1칸)
 
-    h_line = (
-        f"{' '*W_NUM}{GAP}"
-        f"{center_align('종목', W_NAME)}{GAP}"
-        f"{center_align('거래대금(억)', W_AMT)}{GAP}"
-        f"{center_align('차트', W_CHART)}"
-    )
+    # 1. 헤더 생성 (가운데 정렬 적용)
+    h_rank = " " * W_RANK
+    h_name = center_align("종목", W_NAME)
+    h_amt  = center_align("대금", W_AMT)
+    h_chart= center_align("차트", W_CHART)
     
-    lines = []
-    lines.append(f"<code>{html.escape(h_line)}</code>")
-    lines.append("-" * 48)
+    # 헤더 라인 조립
+    header_line = f"{h_rank}{GAP}{h_name}{GAP}{h_amt}{GAP}{h_chart}"
+    lines = [f"<code>{html.escape(header_line)}</code>"]
+    lines.append("-" * 40) # 구분선
 
-    for i, (nm, av, t_code) in enumerate(zip(names, amts, tickers), 1):
-        rank_s = f"{str(i)+')':<{W_NUM}}"
-        name_s = center_align(nm[:5], W_NAME)
-        amt_s = center_align(av, W_AMT)
-        stat = get_chart_status(t_code)
-        chart_s = center_align(stat, W_CHART)
+    # 2. 데이터 라인 생성
+    for i, (nm, av, t_code) in enumerate(zip(names, amts, tickers), start=1):
+        # (1) 순위: 왼쪽 정렬 (가독성 위해)
+        rank_str = f"{str(i)+')':<{W_RANK}}"
 
-        row = f"{rank_s}{GAP}{name_s}{GAP}{amt_s}{GAP}{chart_s}"
-        lines.append(f"<code>{html.escape(row)}</code>")
+        # (2) 종목명: 5글자로 자르고 가운데 정렬
+        nm_trunc = nm[:5] 
+        name_str = center_align(nm_trunc, W_NAME)
 
-    return header + "\n".join(lines)
+        # (3) 거래대금: 가운데 정렬
+        amt_str = center_align(av, W_AMT)
+
+        # (4) 차트위치: 가운데 정렬
+        status = get_chart_status(t_code) # [주의] 위에서 수정한 함수(인자 1개)여야 함
+        chart_str = center_align(status, W_CHART)
+        
+        # 라인 조립 (Code Block으로 감싸서 정렬 유지)
+        row_str = f"{rank_str}{GAP}{name_str}{GAP}{amt_str}{GAP}{chart_str}"
+        lines.append(f"<code>{html.escape(row_str)}</code>")
+
+    return header + "\n" + "\n".join(lines)
 
 # ---------- 실행부 ----------
 if __name__ == "__main__":
