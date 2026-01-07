@@ -10,8 +10,8 @@ import unicodedata
 # --- [필수 라이브러리] ---
 import requests
 from bs4 import BeautifulSoup
-import FinanceDataReader as fdr  # 차트 분석용
-from pykrx import stock          # 거래대금/시총용
+import FinanceDataReader as fdr
+from pykrx import stock
 import pandas as pd
 
 # --- Telegram ENV ---
@@ -28,7 +28,7 @@ TG_MAX = 4096
 # ---------- Telegram 전송 함수 ----------
 def tg_send(text: str):
     if not BOT_TOKEN:
-        print("❌ 봇 토큰 없음")
+        print("❌ [오류] 봇 토큰이 설정되지 않았습니다. 메시지를 보낼 수 없습니다.")
         return
     
     def _post(msg: str, parse_html: bool = True):
@@ -45,8 +45,8 @@ def tg_send(text: str):
         try:
             with request.urlopen(req, timeout=30) as resp:
                 json.loads(resp.read().decode("utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"❌ [전송 실패] 텔레그램 API 에러: {e}")
 
     if len(text) <= TG_MAX:
         try: _post(text, True)
@@ -60,32 +60,47 @@ def tg_send(text: str):
         except: _post(chunk, False)
         i += TG_MAX
 
-# ---------- [핵심] 날짜 계산 (주말 자동 스킵) ----------
+# ---------- [핵심] 날짜 계산 (안전장치 추가) ----------
 def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
     """
-    DB에 존재하는 '가장 최근 거래일(d1)'과 '그 직전 거래일(d0)'을 반환.
-    리스트 기반이므로 월요일엔 자동으로 금요일과 비교하게 됨.
+    DB에 있는 '가장 최근 거래일'을 기준으로 비교 날짜를 선정합니다.
+    [중요] 만약 조회된 마지막 날짜가 '오늘'이라면, 아직 장 마감 데이터가
+    완전하지 않을 수 있으므로 안전하게 '어제' vs '그제'로 미룹니다.
     """
     try:
         target_date = now_kst.date()
+        print(f"🔎 [날짜분석] 오늘 날짜: {target_date}")
         
         # 넉넉하게 2주치 조회
         end_str = target_date.strftime("%Y%m%d")
         start_str = (target_date - dt.timedelta(days=14)).strftime("%Y%m%d")
         
+        # 삼성전자 데이터로 거래일 확인
         df = stock.get_market_ohlcv_by_date(start_str, end_str, ticker="005930")
         
-        if df.empty or len(df) < 2:
+        if df.empty or len(df) < 3:
+            print("❌ [날짜분석] 최근 거래일 데이터를 불러올 수 없습니다.")
             return None, None
             
         valid_dates = df.index.tolist()
+        last_db_date = valid_dates[-1].date()
+        print(f"🔎 [날짜분석] DB상 최근 거래일: {last_db_date}")
         
-        # [수정됨] 무조건 가장 최근 데이터 2개 추출
-        d1 = valid_dates[-1].date() # 예: 1/5 (월)
-        d0 = valid_dates[-2].date() # 예: 1/2 (금)
-        
+        # [안전장치] DB 마지막 날짜가 '오늘'이면 -> 하루 전으로 이동
+        # (이유: 장 중이거나 데이터 집계 전일 수 있으므로 확정된 어제 데이터를 쓰기 위함)
+        if last_db_date == target_date:
+            print("💡 [날짜조정] 오늘 데이터가 감지되어 '어제' 마감 기준으로 변경합니다.")
+            d1 = valid_dates[-2].date()
+            d0 = valid_dates[-3].date()
+        else:
+            # DB 마지막 날짜가 오늘이 아님 (이미 어제 마감된 데이터임)
+            d1 = valid_dates[-1].date()
+            d0 = valid_dates[-2].date()
+            
+        print(f"✅ [최종선정] 기준일(T): {d1} vs 대조일(T-1): {d0}")
         return d1, d0
-    except Exception:
+    except Exception as e:
+        print(f"❌ [날짜분석 에러] {e}")
         return None, None
 
 def yyyymmdd(d: dt.date) -> str:
@@ -127,7 +142,7 @@ def get_mcap_by_market(datestr: str, market: str) -> pd.DataFrame:
     except:
         return pd.DataFrame(columns=["티커", "시가총액"])
 
-# ---------- 차트 분석 (FinanceDataReader) ----------
+# ---------- 차트 분석 ----------
 def get_chart_status(ticker: str) -> str:
     try:
         now = dt.datetime.now(KST)
@@ -141,44 +156,34 @@ def get_chart_status(ticker: str) -> str:
         close = df['Close']
         curr = close.iloc[-1]
         
-        # 1. 신고가 (최근 60일 고가 기준)
         recent_high = close.tail(60).max()
-        if curr >= recent_high * 0.98:
-            return "🔥신고가"
+        if curr >= recent_high * 0.98: return "🔥신고가"
 
-        # 이평선
         ma5 = close.rolling(5).mean().iloc[-1]
         ma20 = close.rolling(20).mean().iloc[-1]
         ma60 = close.rolling(60).mean().iloc[-1]
 
-        # 2. 역배열
-        if ma60 > ma20 > ma5:
-            return "📉역배열"
+        if ma60 > ma20 > ma5: return "📉역배열"
 
-        # 3. 박스권/바닥권
         recent_low = close.tail(60).min()
         if recent_high > recent_low:
             pos = (curr - recent_low) / (recent_high - recent_low)
             if pos >= 0.8: return "📦박스상단"
             elif pos <= 0.2: return "💧바닥권"
 
-        # 4. 정배열
-        if ma5 > ma20 > ma60:
-            return "📈정배열"
+        if ma5 > ma20 > ma60: return "📈정배열"
 
         return "⚖️중립"
     except:
         return "-"
 
-# ---------- 리포트 생성 (요청하신 포맷 적용) ----------
+# ---------- 리포트 생성 ----------
 def build_report():
     import unicodedata, html
 
-    # [글자 폭 계산]
     def disp_width(s: str) -> int:
         return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
 
-    # [가운데 정렬 함수]
     def center_align(s: str, width: int) -> str:
         s_len = disp_width(s)
         if s_len >= width: return s
@@ -195,7 +200,7 @@ def build_report():
     d1_str = yyyymmdd(d1_date)
     d0_str = yyyymmdd(d0_date)
 
-    # 데이터 수집
+    print("⏳ 데이터 수집 중...")
     dfs_v1, dfs_v0, dfs_cap = [], [], []
     for mkt in ["KOSPI", "KOSDAQ"]:
         dfs_v1.append(get_trading_value_by_market(d1_str, mkt))
@@ -207,20 +212,21 @@ def build_report():
     cap = pd.concat(dfs_cap, ignore_index=True)
 
     if v1.empty or v0.empty:
+        print("❌ [데이터 오류] 해당 날짜의 거래대금 데이터를 가져오지 못했습니다.")
         return None
 
-    # [필터링] 거래대금 급증 5배(500%) 이상
+    # [필터링]
     merged = pd.merge(v1, v0, on="티커", how="inner", suffixes=("_1", "_0"))
     merged = merged[merged["거래대금_0"] > 0]
     merged["배수"] = merged["거래대금_1"] / merged["거래대금_0"]
     
     target = merged[merged["배수"] >= 5.0].copy()
+    print(f"📊 1차 필터링 완료: {len(target)}개 종목 발견")
 
-    # 정렬 및 Top 30
     target = pd.merge(target, cap, on="티커", how="left").fillna(0)
     target = target.sort_values(by="거래대금_1", ascending=False).head(30)
 
-    # 포맷팅용 데이터 준비
+    # 포맷팅
     names = []
     tickers = target["티커"].tolist()
     for t in tickers:
@@ -231,7 +237,6 @@ def build_report():
     for val in target["거래대금_1"].tolist():
         amts.append(f"{val/100000000:,.1f}")
 
-    # ===== 메시지 구성 =====
     header = (
         f"[SK증권]\n"
         f"안녕하십니까 \n"
@@ -243,14 +248,8 @@ def build_report():
     if target.empty:
         return header + "\n(조건 만족 종목 없음)"
 
-    # [테이블 너비 설정]
-    W_NUM = 3    # "1) "
-    W_NAME = 12  # 종목명
-    W_AMT = 12   # 거래대금
-    W_CHART = 10 # 차트
-    GAP = "   "  # 칼럼 사이 공백
+    W_NUM = 3; W_NAME = 12; W_AMT = 12; W_CHART = 10; GAP = "   "
 
-    # 헤더 라인 (가운데 정렬)
     h_line = (
         f"{' '*W_NUM}{GAP}"
         f"{center_align('종목', W_NAME)}{GAP}"
@@ -260,12 +259,11 @@ def build_report():
     
     lines = []
     lines.append(f"<code>{html.escape(h_line)}</code>")
-    lines.append("-" * 48) # 구분선 길이
+    lines.append("-" * 48)
 
-    # 데이터 라인 생성
     for i, (nm, av, t_code) in enumerate(zip(names, amts, tickers), 1):
         rank_s = f"{str(i)+')':<{W_NUM}}"
-        name_s = center_align(nm[:5], W_NAME) # 5글자 제한
+        name_s = center_align(nm[:5], W_NAME)
         amt_s = center_align(av, W_AMT)
         stat = get_chart_status(t_code)
         chart_s = center_align(stat, W_CHART)
@@ -277,12 +275,20 @@ def build_report():
 
 # ---------- 실행부 ----------
 if __name__ == "__main__":
+    print("🚀 스크립트 실행 시작")
+    if not BOT_TOKEN:
+        print("⚠️ [경고] 봇 토큰이 없습니다. Secrets 설정을 확인하세요.")
+    
     try:
         msg = build_report()
         if msg:
+            print("📨 메시지 전송 시도...")
             tg_send(msg)
+            print("✅ 전송 완료")
         else:
-            print("생성된 메시지 없음")
+            print("⚠️ 생성된 메시지가 없습니다. (휴장일 또는 데이터 부족)")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ [치명적 에러] {e}")
         sys.exit(1)
+
+
