@@ -106,46 +106,66 @@ def yyyy_mm_dd(d: dt.date) -> str:
 # ---------- [핵심 수정] 데이터 수집 통합 함수 ----------
 def get_market_data(datestr: str, market: str) -> pd.DataFrame:
     """
-    기존에 에러가 나던 get_market_ohlcv_by_ticker 대신,
-    안정적인 get_market_cap_by_ticker를 사용하여 '거래대금'과 '시가총액'을 한 번에 가져옵니다.
+    get_market_cap_by_ticker 기반
+    거래대금 / 시가총액을 안정적으로 수집
     """
     max_retries = 3
+
     for i in range(max_retries):
         try:
-            time.sleep(1) # 연속 호출 차단 방지
-            
-            # 이 함수는 [종가, 시가총액, 거래량, 거래대금, 상장주식수]를 반환합니다.
+            time.sleep(1)  # 연속 호출 방지
+
             df = stock.get_market_cap_by_ticker(datestr, market=market)
-            
-            if df is None or len(df) == 0:
+
+            if df is None or df.empty:
                 raise ValueError("빈 데이터")
 
             df = df.reset_index()
-            
-            # 필요한 컬럼만 추출 ('티커', '거래대금', '시가총액')
-            # 컬럼명이 조금씩 다를 수 있어 유연하게 찾습니다.
-            cols = df.columns
-            val_col = next((c for c in cols if "대금" in c or "거래금액" in c), None)
-            cap_col = next((c for c in cols if "총액" in c), None)
-            
+
+            cols = df.columns.tolist()
+
+            # ---- 컬럼 후보 정의 ----
+            val_candidates = ["거래대금", "거래대금(원)", "거래금액"]
+            cap_candidates = ["시가총액", "시가총액(원)", "시총"]
+
+            val_col = next((c for c in val_candidates if c in cols), None)
+            cap_col = next((c for c in cap_candidates if c in cols), None)
+
             if not val_col or not cap_col:
-                raise ValueError(f"필수 컬럼 누락 (대금:{val_col}, 시총:{cap_col})")
+                raise ValueError(
+                    f"필수 컬럼 누락 | columns={cols}"
+                )
 
             out = df[["티커", val_col, cap_col]].copy()
-            out.rename(columns={val_col: "거래대금", cap_col: "시가총액"}, inplace=True)
-            
-            # 숫자형 변환
-            out["거래대금"] = pd.to_numeric(out["거래대금"], errors="coerce").fillna(0).astype("int64")
-            out["시가총액"] = pd.to_numeric(out["시가총액"], errors="coerce").fillna(0).astype("int64")
-            
+            out.rename(
+                columns={
+                    val_col: "거래대금",
+                    cap_col: "시가총액",
+                },
+                inplace=True
+            )
+
+            # 숫자형 변환 (안전)
+            out["거래대금"] = (
+                pd.to_numeric(out["거래대금"], errors="coerce")
+                .fillna(0)
+                .astype("int64")
+            )
+            out["시가총액"] = (
+                pd.to_numeric(out["시가총액"], errors="coerce")
+                .fillna(0)
+                .astype("int64")
+            )
+
             return out
 
         except Exception as e:
             print(f"⚠️ [재시도 {i+1}/{max_retries}] {market} {datestr} 수집 실패: {e}")
             time.sleep(2)
-            
+
     print(f"❌ 최종 실패: {market} {datestr}")
     return pd.DataFrame(columns=["티커", "거래대금", "시가총액"])
+
 
 # ---------- 차트 분석 ----------
 def get_chart_status(ticker: str) -> str:
