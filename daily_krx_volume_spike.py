@@ -69,9 +69,8 @@ def tg_send(text: str):
 # ---------- [핵심] 날짜 계산 (휴장일 자동 건너뛰기) ----------
 def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
     """
-    삼성전자(005930) 데이터를 조회하여 '실제 장이 열린 날'을 기준으로
-    오늘(또는 가장 최근 거래일)과 직전 거래일을 찾아냅니다.
-    1월 1일 같은 공휴일을 자동으로 건너뜁니다.
+    [수정됨] 오늘(T)이 아닌, '직전 거래일(T-1)'과 '그 전 거래일(T-2)'을 비교합니다.
+    예: 오늘이 7일이면 -> 6일 vs 5일(또는 3일) 비교
     """
     try:
         target_date = now_kst.date()
@@ -83,29 +82,21 @@ def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
         # 삼성전자 일별 시세로 거래일 확인
         df = stock.get_market_ohlcv_by_date(start_str, end_str, ticker="005930")
         
-        if df.empty or len(df) < 2:
+        # 최소 3일치 데이터가 있어야 T-1 vs T-2 비교 가능
+        if df.empty or len(df) < 3:
             return None, None
             
         valid_dates = df.index.tolist()
-        last_biz_day = valid_dates[-1].date()
         
-        # 오늘이 장 열린 날인지 확인 (장 마감 전에는 데이터가 없을 수도 있음)
-        if last_biz_day != target_date:
-            # 주말/공휴일이거나 아직 데이터 업데이트 전
-            return None, None
-            
-        d1 = valid_dates[-1].date() # 오늘 (최근 거래일)
-        d0 = valid_dates[-2].date() # 어제 (직전 거래일)
+        # [핵심 수정] 인덱스 변경
+        # 원래: d1=valid_dates[-1] (오늘), d0=valid_dates[-2] (어제)
+        # 변경: d1=valid_dates[-2] (어제), d0=valid_dates[-3] (그저께)
+        d1 = valid_dates[-2].date() 
+        d0 = valid_dates[-3].date() 
         
         return d1, d0
     except Exception:
         return None, None
-
-def yyyymmdd(d: dt.date) -> str:
-    return d.strftime("%Y%m%d")
-
-def yyyy_mm_dd(d: dt.date) -> str:
-    return d.strftime("%Y-%m-%d")
 
 # ---------- 데이터 수집 (pykrx) ----------
 def get_trading_value_by_market(datestr: str, market: str) -> pd.DataFrame:
