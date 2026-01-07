@@ -57,44 +57,40 @@ def tg_send(text: str):
             try: _post(chunk, True)
             except: _post(chunk, False)
 
-# ---------- 날짜 계산 ----------
-def pick_compare_days(now_kst: dt.datetime) -> tuple[dt.date, dt.date]:
+# ---------- [핵심] 실제 데이터 존재 날짜 찾기 ----------
+def pick_latest_valid_days() -> tuple[dt.date, dt.date]:
     """
-    DB(삼성전자)에 존재하는 '가장 최근 거래일(d1)'과 '그 직전 거래일(d0)'을 반환.
-    오늘 데이터가 아직 집계 전이거나 장 중이면, 안전하게 하루 전 데이터를 사용.
+    시스템 날짜(2026년 등)를 맹신하지 않고,
+    '실제로 주가 데이터가 존재하는 가장 마지막 날짜'를 찾아냅니다.
     """
     try:
-        target_date = now_kst.date()
-        print(f"🔎 [날짜분석] 오늘: {target_date}")
+        now = dt.datetime.now(KST)
+        print(f"🖥️ [시스템 기준 오늘] {now.date()}")
         
-        # 넉넉하게 2주치 조회
-        end_str = target_date.strftime("%Y%m%d")
-        start_str = (target_date - dt.timedelta(days=14)).strftime("%Y%m%d")
+        # [해결책] 2024년부터 오늘까지의 데이터 중 '데이터가 있는 날'만 가져옴
+        # 이렇게 하면 중간에 빈 날짜(휴일, 미래 등)는 자동으로 걸러집니다.
+        start_str = "20240101"
+        end_str = now.strftime("%Y%m%d")
         
-        # 삼성전자(005930)로 거래일 확인
+        print("🔎 유효한 거래일 데이터를 검색합니다...")
+        # 삼성전자(005930) 기준으로 거래일 리스트 확보
         df = stock.get_market_ohlcv_by_date(start_str, end_str, ticker="005930")
         
         if df.empty or len(df) < 2:
-            print("❌ [날짜분석] 거래일 데이터를 불러올 수 없습니다.")
+            print("❌ [오류] 조회 가능한 거래일이 없습니다. (네이버 금융 접속 불가 등)")
             return None, None
             
         valid_dates = df.index.tolist()
-        last_db_date = valid_dates[-1].date()
         
-        # DB 마지막 날짜가 '오늘'이면 -> 아직 장 마감 데이터가 불안정할 수 있으므로 '어제' vs '그제'로 변경
-        if last_db_date == target_date:
-            print("💡 [날짜조정] 오늘 데이터 감지됨 → '어제' 마감 기준으로 변경합니다.")
-            d1 = valid_dates[-2].date()
-            d0 = valid_dates[-3].date()
-        else:
-            # DB 마지막 날짜가 어제(또는 그 이전)임 -> 확정된 데이터
-            d1 = valid_dates[-1].date()
-            d0 = valid_dates[-2].date()
-            
-        print(f"✅ [최종선정] 기준일: {d1} vs 대조일: {d0}")
-        return d1, d0
+        # 가장 마지막 날짜 = 진짜 최신 거래일
+        real_d1 = valid_dates[-1].date() # 최신일
+        real_d0 = valid_dates[-2].date() # 직전일
+        
+        print(f"✅ [날짜 확정] 데이터가 있는 최신일: {real_d1} (대조: {real_d0})")
+        return real_d1, real_d0
+        
     except Exception as e:
-        print(f"❌ [날짜분석 에러] {e}")
+        print(f"❌ [날짜 분석 실패] {e}")
         return None, None
 
 def yyyymmdd(d: dt.date) -> str:
@@ -103,60 +99,61 @@ def yyyymmdd(d: dt.date) -> str:
 def yyyy_mm_dd(d: dt.date) -> str:
     return d.strftime("%Y-%m-%d")
 
-# ---------- [핵심 수정] 데이터 수집 통합 함수 ----------
+# ---------- 데이터 수집 (안정성 강화) ----------
 def get_market_data(datestr: str, market: str) -> pd.DataFrame:
+    """
+    get_market_cap_by_ticker를 사용하여 데이터 수집 (OHLCV보다 안정적)
+    """
     max_retries = 3
-
     for i in range(max_retries):
         try:
-            time.sleep(1)
-
+            time.sleep(1) # 1초 대기 (차단 방지)
+            
+            # 시가총액/거래대금 등 전체 데이터 조회
             df = stock.get_market_cap_by_ticker(datestr, market=market)
-
-            if df is None or df.empty:
-                raise ValueError("빈 데이터 (휴장일 또는 미래 날짜 가능)")
+            
+            if df is None or len(df) == 0:
+                raise ValueError("데이터 없음 (Empty)")
 
             df = df.reset_index()
+            cols = df.columns
+            
+            # 컬럼명 유연하게 찾기
+            val_col = next((c for c in cols if "대금" in c or "거래금액" in c), None)
+            
+            if not val_col:
+                raise ValueError("거래대금 컬럼을 찾을 수 없음")
 
-            # 필수 컬럼 확인
-            required_cols = ["티커", "종가", "거래량", "시가총액"]
-            missing = [c for c in required_cols if c not in df.columns]
-            if missing:
-                raise ValueError(f"컬럼 누락: {missing}")
-
-            out = df[required_cols].copy()
-
-            # 숫자형 변환
-            for c in ["종가", "거래량", "시가총액"]:
-                out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
-
-            # 거래대금 직접 계산
-            out["거래대금"] = out["종가"] * out["거래량"]
-
-            # 👉 억원 단위 변환
-            out["거래대금"] = (out["거래대금"] / 1e8).round(1)
-            out["시가총액"] = (out["시가총액"] / 1e8).round(1)
-
-            return out[["티커", "거래대금", "시가총액"]]
+            # 필요한 컬럼만 추출
+            out = df[["티커", val_col]].copy()
+            out.rename(columns={val_col: "거래대금"}, inplace=True)
+            out["거래대금"] = pd.to_numeric(out["거래대금"], errors="coerce").fillna(0).astype("int64")
+            
+            # 시가총액도 있으면 가져오기 (정렬용)
+            cap_col = next((c for c in cols if "총액" in c), None)
+            if cap_col:
+                out["시가총액"] = df[cap_col]
+            else:
+                out["시가총액"] = 0
+                
+            return out
 
         except Exception as e:
-            print(f"⚠️ [재시도 {i+1}/{max_retries}] {market} {datestr} 수집 실패: {e}")
+            print(f"⚠️ [재시도 {i+1}] {market} {datestr} 읽기 실패: {e}")
             time.sleep(2)
-
-    print(f"❌ 최종 실패: {market} {datestr}")
+            
+    print(f"❌ [최종 실패] {market} {datestr} 데이터를 가져오지 못했습니다.")
     return pd.DataFrame(columns=["티커", "거래대금", "시가총액"])
-
-
-
 
 # ---------- 차트 분석 ----------
 def get_chart_status(ticker: str) -> str:
     try:
+        # 차트 데이터 조회 (fdr은 날짜 범위가 넓어도 알아서 처리해줌)
         now = dt.datetime.now(KST)
-        today = now.strftime("%Y-%m-%d")
-        start_day = (now - dt.timedelta(days=120)).strftime("%Y-%m-%d")
+        today_str = now.strftime("%Y-%m-%d")
+        start_str = (now - dt.timedelta(days=120)).strftime("%Y-%m-%d")
         
-        df = fdr.DataReader(ticker, start=start_day, end=today)
+        df = fdr.DataReader(ticker, start=start_str, end=today_str)
         if df.empty or len(df) < 60:
             return "-"
 
@@ -198,8 +195,8 @@ def build_report():
         right_pad = width - s_len - left_pad
         return " " * left_pad + s + " " * right_pad
 
-    now = dt.datetime.now(KST)
-    d1_date, d0_date = pick_compare_days(now)
+    # 1. 날짜 선정 (자동 보정)
+    d1_date, d0_date = pick_latest_valid_days()
     
     if d1_date is None:
         return None
@@ -207,53 +204,48 @@ def build_report():
     d1_str = yyyymmdd(d1_date)
     d0_str = yyyymmdd(d0_date)
 
-    print("⏳ 데이터 수집 시작...")
-    dfs_1, dfs_0 = [], []
+    print(f"⏳ 데이터 수집 시작 ({d1_str} vs {d0_str})...")
     
+    dfs_1, dfs_0 = [], []
     for mkt in ["KOSPI", "KOSDAQ"]:
         dfs_1.append(get_market_data(d1_str, mkt))
         dfs_0.append(get_market_data(d0_str, mkt))
 
-    # 데이터 합치기
     df_1 = pd.concat(dfs_1, ignore_index=True)
     df_0 = pd.concat(dfs_0, ignore_index=True)
 
     if df_1.empty or df_0.empty:
-        print("❌ [중단] 데이터프레임이 비어 있어 리포트를 생성할 수 없습니다.")
+        print("❌ [중단] 데이터가 비어있습니다. (해당 날짜 데이터 수집 불가)")
         return None
 
-    # [데이터 병합] T-1일 데이터와 T-2일 데이터 매칭
-    # 필요한 컬럼만 남겨서 병합 (시가총액은 최신 날짜인 df_1 것만 사용)
+    # 데이터 병합
     df_1_sub = df_1[["티커", "거래대금", "시가총액"]]
     df_0_sub = df_0[["티커", "거래대금"]]
     
     merged = pd.merge(df_1_sub, df_0_sub, on="티커", how="inner", suffixes=("_1", "_0"))
     
-    # [필터링]
-    # 1. 전전일 거래대금이 0이 아니어야 함 (나눗셈 에러 방지)
-    # 2. 거래대금 5배(500%) 이상 급증
+    # [필터링] 거래대금 5배(500%) 이상
     merged = merged[merged["거래대금_0"] > 0]
     merged["배수"] = merged["거래대금_1"] / merged["거래대금_0"]
     
     target = merged[merged["배수"] >= 5.0].copy()
-    print(f"📊 1차 필터(5배 이상): {len(target)}개 종목 발견")
+    print(f"📊 조건 만족 종목: {len(target)}개")
 
-    # 정렬: 거래대금(당일) 내림차순 -> 상위 30개
+    # 정렬 (거래대금순)
     target = target.sort_values(by="거래대금_1", ascending=False).head(30)
 
-    # 종목명 가져오기
+    # 종목명 및 포맷팅
     names = []
     tickers = target["티커"].tolist()
     for t in tickers:
         try: names.append(stock.get_market_ticker_name(t))
         except: names.append(t)
 
-    # 금액 포맷팅 (억원)
     amts = []
     for val in target["거래대금_1"].tolist():
         amts.append(f"{val/100000000:,.1f}")
 
-    # ===== 메시지 작성 =====
+    # 메시지 작성
     header = (
         f"[SK증권]\n"
         f"안녕하십니까 \n"
@@ -293,9 +285,7 @@ def build_report():
 # ---------- 실행부 ----------
 if __name__ == "__main__":
     print("🚀 스크립트 실행 시작")
-    if not BOT_TOKEN:
-        print("⚠️ [주의] 봇 토큰이 설정되지 않았습니다.")
-
+    
     try:
         msg = build_report()
         if msg:
@@ -303,9 +293,7 @@ if __name__ == "__main__":
             tg_send(msg)
             print("✅ 전송 완료")
         else:
-            print("⚠️ 생성된 메시지가 없습니다.")
+            print("⚠️ 보낼 메시지가 없습니다.")
     except Exception as e:
         print(f"❌ [치명적 에러] {e}")
-        # 필요 시 에러도 텔레그램으로 전송
-        # tg_send(f"⚠️ 에러 발생: {e}")
         sys.exit(1)
