@@ -90,7 +90,7 @@ def get_chart_status(ticker: str) -> str:
     except:
         return "-"
 
-# ---------- [핵심] FDR StockListing 활용 ----------
+# ---------- FDR StockListing 데이터 수집 ----------
 def get_market_data_fdr(market: str):
     try:
         print(f"📥 {market} 데이터 다운로드 중 (StockListing)...")
@@ -149,7 +149,7 @@ def build_report():
 
     print(f"✅ 총 {len(current_df)}개 종목 데이터 확보.")
 
-    # 거래대금 10억 이상 상위 100개
+    # 거래대금 10억 이상 상위 100개 추리기
     candidates = current_df[current_df['거래대금'] >= 10_0000_0000].copy()
     candidates = candidates.sort_values(by='거래대금', ascending=False).head(100)
     
@@ -185,7 +185,7 @@ def build_report():
                 
             ratio = amt_t / amt_prev
             
-            # [조건] 5배 이상
+            # [조건] 5배 이상 급증
             if ratio >= 5.0:
                 results.append({
                     '티커': ticker,
@@ -209,14 +209,16 @@ def build_report():
         target = pd.DataFrame(results)
         ref_date = target.iloc[0]['기준일']
         ref_prev = target.iloc[0]['대조일']
-        target = target.sort_values(by='거래대금', ascending=False).head(30)
-        print(f"📊 최종 선별: {len(target)}개 종목")
+        
+        # [수정됨] 정렬 기준 변경: 거래대금 -> 시가총액 (내림차순)
+        target = target.sort_values(by='시가총액', ascending=False).head(30)
+        print(f"📊 최종 선별: {len(target)}개 종목 (시가총액 순)")
 
-    # [수정됨] 금액 포맷팅 (소수점 제거: ,.0f)
+    # 포맷팅 (정수 표기)
     amts = []
     if not target.empty:
         for val in target["거래대금"].tolist():
-            amts.append(f"{val/100000000:,.0f}")  # <--- 정수 표기
+            amts.append(f"{val/100000000:,.0f}")
         
         names = target["종목명"].tolist()
         tickers = target["티커"].tolist()
@@ -237,7 +239,7 @@ def build_report():
     W_NUM = 3; W_NAME = 12; W_AMT = 12; W_CHART = 10; GAP = "   "
 
     h_line = (
-        f"{'     '*W_NUM}{GAP}"
+        f"{'  '*W_NUM}{GAP}"
         f"{center_align('종목', W_NAME)}{GAP}"
         f"{center_align('거래대금(억)', W_AMT)}{GAP}"
         f"{center_align('차트', W_CHART)}"
@@ -274,4 +276,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ [치명적 에러] {e}")
         sys.exit(1)
-
