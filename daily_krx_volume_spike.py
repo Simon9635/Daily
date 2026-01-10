@@ -240,7 +240,7 @@ def build_report():
 
     h_line = (
         f"{'  '*W_NUM}{GAP}"
-        f"{center_align('종목', W_NAME)}{GAP}"
+        f"{center_align('종목 ', W_NAME)}{GAP}"
         f"{center_align(' 거래대금(억)', W_AMT)}{GAP}"
         f"{center_align('차트', W_CHART)}"
     )
