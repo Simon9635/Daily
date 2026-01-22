@@ -254,22 +254,22 @@ def build_report():
 
     header = (
         f"[SK증권]\n"
-        f"안녕하십니까 \n"
-        f"sk 김수민입니다\n"
-        f"전일거래대금 급증 종목 공유드립니다!\n"
+        f"안녕하십니까,\n"
+        f"<b><u>전일거래대금 급증 종목 공유드립니다!</u></b>\n"
         f"[기준일: {ref_date} vs {ref_prev}]\n"
+        f"\n"
     )
 
     if target.empty:
         return header + "\n(조건 만족 종목 없음)"
 
-    W_NUM = 3; W_NAME = 12; W_AMT = 12; W_CHART = 10; GAP = "   "
+    W_NUM = 1; W_NAME = 11; W_AMT = 11; W_CHART = 9; GAP = "   "
 
     h_line = (
-        f"{' '*W_NUM}{GAP}"
+        f"{'   '*W_NUM}{GAP}"
         f"{center_align('종목', W_NAME)}{GAP}"
-        f"{center_align('거래대금(억)', W_AMT)}{GAP}"
-        f"{center_align('차트', W_CHART)}"
+        f"{center_align(' 거래대금(억)', W_AMT)}{GAP}"
+        f"{center_align(' 차트', W_CHART)}"
     )
     
     lines = []
