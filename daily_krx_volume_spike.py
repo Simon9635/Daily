@@ -55,36 +55,62 @@ def tg_send(text: str):
             try: _post(chunk, True)
             except: _post(chunk, False)
 
-# ---------- 차트 분석 ----------
+# ---------- [핵심 수정] 차트 분석 로직 개선 ----------
 def get_chart_status(ticker: str) -> str:
     try:
         now = dt.datetime.now(KST)
         today = now.strftime("%Y-%m-%d")
-        start_day = (now - dt.timedelta(days=120)).strftime("%Y-%m-%d")
+        # [변경 1] 기간을 넉넉하게 180일 전부터 가져옴 (이평선 120일 계산 위해)
+        start_day = (now - dt.timedelta(days=180)).strftime("%Y-%m-%d")
         
         df = fdr.DataReader(ticker, start=start_day, end=today)
-        if df.empty or len(df) < 60:
+        # 데이터가 너무 적으면 분석 불가
+        if df.empty or len(df) < 120:
             return "-"
 
         close = df['Close']
         curr = close.iloc[-1]
         
-        recent_high = close.tail(60).max()
-        if curr >= recent_high * 0.98: return "🔥신고가"
+        # [변경 2] 최근 120일(약 6개월) 기준으로 고가/저가 산출
+        window = 120
+        recent_high = close.tail(window).max()
+        recent_low = close.tail(window).min()
+        
+        # 현재 위치 (0.0 = 최저가, 1.0 = 최고가)
+        if recent_high == recent_low:
+            position = 0.5
+        else:
+            position = (curr - recent_low) / (recent_high - recent_low)
 
+        # 이평선 계산
         ma5 = close.rolling(5).mean().iloc[-1]
         ma20 = close.rolling(20).mean().iloc[-1]
         ma60 = close.rolling(60).mean().iloc[-1]
+        ma120 = close.rolling(120).mean().iloc[-1] # 120일선 추가
 
-        if ma60 > ma20 > ma5: return "📉역배열"
+        # --- [변경 3] 판단 우선순위 재조정 ---
+        
+        # 1. 바닥권인지 먼저 확인 (급등했어도 전체 위치가 낮으면 바닥권)
+        # (하위 25% 이내)
+        if position <= 0.25:
+            return "💧바닥권"
 
-        recent_low = close.tail(60).min()
-        if recent_high > recent_low:
-            pos = (curr - recent_low) / (recent_high - recent_low)
-            if pos >= 0.8: return "📦박스상단"
-            elif pos <= 0.2: return "💧바닥권"
+        # 2. 역배열 확인 (장기 이평선이 위에 있는지)
+        # 120일선 > 60일선 > 20일선 구조면 역배열로 간주
+        if ma120 > ma60 > ma20:
+            return "📉역배열"
 
-        if ma5 > ma20 > ma60: return "📈정배열"
+        # 3. 정배열 확인 (단기 > 중기 > 장기)
+        if ma5 > ma20 > ma60 > ma120:
+            return "📈정배열"
+
+        # 4. 신고가 확인 (상위 2% 이내)
+        if curr >= recent_high * 0.98:
+            return "🔥신고가"
+
+        # 5. 박스권 상단 (상위 20% 이내)
+        if position >= 0.8:
+            return "📦박스상단"
 
         return "⚖️중립"
     except:
@@ -165,6 +191,7 @@ def build_report():
         name = row['종목명']
         
         try:
+            # 개별 종목 차트 데이터 조회
             df_hist = fdr.DataReader(ticker, start=start_date, end=end_date)
             
             if len(df_hist) < 3:
@@ -210,11 +237,11 @@ def build_report():
         ref_date = target.iloc[0]['기준일']
         ref_prev = target.iloc[0]['대조일']
         
-        # [수정됨] 정렬 기준 변경: 거래대금 -> 시가총액 (내림차순)
+        # [정렬 기준] 시가총액 순 (큰 종목부터)
         target = target.sort_values(by='시가총액', ascending=False).head(30)
         print(f"📊 최종 선별: {len(target)}개 종목 (시가총액 순)")
 
-    # 포맷팅 (정수 표기)
+    # 포맷팅
     amts = []
     if not target.empty:
         for val in target["거래대금"].tolist():
@@ -227,22 +254,22 @@ def build_report():
 
     header = (
         f"[SK증권]\n"
-        f"안녕하십니까 sk 김수민입니다\n"
-        f"<b><u>전일거래대금 급증 종목 공유드립니다!</u></b>\n"
+        f"안녕하십니까 \n"
+        f"sk 김수민입니다\n"
+        f"전일거래대금 급증 종목 공유드립니다!\n"
         f"[기준일: {ref_date} vs {ref_prev}]\n"
-        f"\n"
     )
 
     if target.empty:
         return header + "\n(조건 만족 종목 없음)"
 
-    W_NUM = 1; W_NAME = 11; W_AMT = 11; W_CHART = 9; GAP = "   "
+    W_NUM = 3; W_NAME = 12; W_AMT = 12; W_CHART = 10; GAP = "   "
 
     h_line = (
-        f"{'   '*W_NUM}{GAP}"
+        f"{' '*W_NUM}{GAP}"
         f"{center_align('종목', W_NAME)}{GAP}"
-        f"{center_align(' 거래대금(억)', W_AMT)}{GAP}"
-        f"{center_align(' 차트', W_CHART)}"
+        f"{center_align('거래대금(억)', W_AMT)}{GAP}"
+        f"{center_align('차트', W_CHART)}"
     )
     
     lines = []
