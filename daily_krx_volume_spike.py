@@ -203,7 +203,7 @@ def build_report():
     if target.empty:
         return header + "\n(조건 만족 종목 없음)"
 
-    W_NUM = 1; W_NAME = 11; W_AMT = 11; W_CHART = 9; GAP = "   "
+    W_NUM = 1; W_NAME = 11; W_AMT = 11; GAP = "   "
 
     h_line = (
         f"{'   '*W_NUM}{GAP}"
@@ -220,7 +220,7 @@ def build_report():
         name_s = center_align(nm[:5], W_NAME)
         amt_s = center_align(av, W_AMT)
 
-        row = f"{rank_s}{GAP}{name_s}{GAP}{amt_s}{GAP}{chart_s}"
+        row = f"{rank_s}{GAP}{name_s}{GAP}{amt_s}"
         lines.append(f"<code>{html.escape(row)}</code>")
 
     return header + "\n".join(lines)
