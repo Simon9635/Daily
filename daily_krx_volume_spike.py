@@ -194,7 +194,6 @@ def build_report():
 
     header = (
         f"[SK증권]\n"
-        f"안녕하십니까,\n"
         f"<b><u>전일거래대금 급증 종목 공유드립니다!</u></b>\n"
         f"[기준일: {ref_date} vs {ref_prev}]\n"
         f"\n"
