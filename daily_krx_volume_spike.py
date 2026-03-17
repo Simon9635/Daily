@@ -212,7 +212,7 @@ def build_report():
     
     lines = []
     lines.append(f"<code>{html.escape(h_line)}</code>")
-    lines.append("-" * 48)
+    lines.append("-" * 26)
 
     for i, (nm, av, t_code) in enumerate(zip(names, amts, tickers), 1):
         rank_s = f"{str(i)+')':<{W_NUM}}"
