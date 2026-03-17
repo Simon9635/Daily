@@ -55,72 +55,6 @@ def tg_send(text: str):
             try: _post(chunk, True)
             except: _post(chunk, False)
 
-# ---------- [핵심 수정] 차트 분석 로직 개선 ----------
-def get_chart_status(ticker: str) -> str:
-    # 최대 3번까지 재시도 (서버가 일시적으로 거절할 때를 대비)
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # [핵심 방어장치] IP 차단을 막기 위해 매 호출마다 0.5초 대기
-            time.sleep(0.5)
-            
-            now = dt.datetime.now(KST)
-            today_str = now.strftime("%Y%m%d")
-            # 120일 이평선을 위해 넉넉히 7개월 전부터 조회
-            start_str = (now - dt.timedelta(days=210)).strftime("%Y%m%d")
-            
-            df = stock.get_market_ohlcv(start_str, today_str, ticker)
-            
-            # 서버가 빈 데이터를 줬다면 다시 시도
-            if df is None or df.empty:
-                time.sleep(1.5) # 실패 시 좀 더 길게 쉬었다가 재시도
-                continue
-
-            close = df['종가']
-            curr = close.iloc[-1]
-            
-            # [유연성 확보] 상장한 지 120일이 안 된 종목도 분석할 수 있게 처리
-            data_len = len(close)
-            if data_len < 20: 
-                return "-" # 최소 20일치도 없으면 분석 포기
-                
-            window = min(120, data_len)
-            recent_high = close.tail(window).max()
-            recent_low = close.tail(window).min()
-            
-            # 현재 위치 (0.0 ~ 1.0)
-            if recent_high == recent_low:
-                position = 0.5
-            else:
-                position = (curr - recent_low) / (recent_high - recent_low)
-
-            # 이평선 계산
-            ma5 = close.rolling(min(5, data_len)).mean().iloc[-1]
-            ma20 = close.rolling(min(20, data_len)).mean().iloc[-1]
-            ma60 = close.rolling(min(60, data_len)).mean().iloc[-1]
-            ma120 = close.rolling(min(120, data_len)).mean().iloc[-1]
-
-            # --- 판단 로직 (우선순위 순) ---
-            if position <= 0.25:
-                return "💧바닥권"
-            if ma120 > ma60 > ma20:
-                return "📉역배열"
-            if ma5 > ma20 > ma60 > ma120:
-                return "📈정배열"
-            if curr >= recent_high * 0.98:
-                return "🔥신고가"
-            if position >= 0.8:
-                return "📦박스상단"
-
-            return "⚖️중립"
-            
-        except Exception as e:
-            # 에러 발생 시 잠시 쉬고 다음 시도로 넘어감
-            time.sleep(1)
-            continue
-            
-    # 3번의 재시도 끝에도 실패하면 최종적으로 하이픈 반환
-    return "-"
 
 # ---------- FDR StockListing 데이터 수집 ----------
 def get_market_data_fdr(market: str):
@@ -275,7 +209,6 @@ def build_report():
         f"{'   '*W_NUM}{GAP}"
         f"{center_align('종목', W_NAME)}{GAP}"
         f"{center_align(' 거래대금(억)', W_AMT)}{GAP}"
-        f"{center_align(' 차트', W_CHART)}"
     )
     
     lines = []
@@ -286,8 +219,6 @@ def build_report():
         rank_s = f"{str(i)+')':<{W_NUM}}"
         name_s = center_align(nm[:5], W_NAME)
         amt_s = center_align(av, W_AMT)
-        stat = get_chart_status(t_code)
-        chart_s = center_align(stat, W_CHART)
 
         row = f"{rank_s}{GAP}{name_s}{GAP}{amt_s}{GAP}{chart_s}"
         lines.append(f"<code>{html.escape(row)}</code>")
