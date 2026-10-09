@@ -2,7 +2,7 @@ name: Telegram Daily 7am KST (KRX Volume Spike)
 
 on:
   schedule:
-    - cron: '0 22 * * 0-4'
+    - cron: '7 22 * * 0-4'
   workflow_dispatch:
 
 jobs:
