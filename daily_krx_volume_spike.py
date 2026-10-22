@@ -262,9 +262,9 @@ def build_report():
     # 메시지 작성
     header = (
         f"[SK증권]\n"
-        f"안녕하십니까 \n"
-        f"sk 김수민입니다\n"
+        f"안녕하십니까 sk 김수민입니다\n"
         f"전일거래대금 급증 종목 공유드립니다!\n"
+        f"\n"
         f"[기준일: {yyyy_mm_dd(d1_date)} vs {yyyy_mm_dd(d0_date)}]\n"
     )
 
