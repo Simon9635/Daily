@@ -12,6 +12,8 @@ jobs:
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      KRX_ID: ${{ secrets.KRX_ID }}
+      KRX_PW: ${{ secrets.KRX_PW }}
     steps:
       - name: Check out
         uses: actions/checkout@v5
@@ -26,6 +28,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install pykrx==1.2.9 finance-datareader pandas requests
           python -m pip show pykrx
-          
+
+      - name: Check KRX credentials
+        run: |
+          python -c "import os; print('KRX_ID:', bool(os.getenv('KRX_ID'))); print('KRX_PW:', bool(os.getenv('KRX_PW')))"
+
       - name: Run report & send to Telegram
         run: python daily_krx_volume_spike.py
