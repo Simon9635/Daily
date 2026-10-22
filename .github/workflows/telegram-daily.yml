@@ -24,7 +24,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --upgrade pykrx finance-datareader pandas requests
-
+          pip install pykrx==1.2.9 finance-datareader pandas requests
+          python -m pip show pykrx
+          
       - name: Run report & send to Telegram
         run: python daily_krx_volume_spike.py
