@@ -272,7 +272,7 @@ def build_report():
     if target.empty:
         return header + "\n(조건 만족 종목 없음)"
 
-    W_NUM = 3; W_NAME = 12; W_AMT = 12; W_CHART = 10; GAP = "   "
+    W_NUM = 3; W_NAME = 12; W_AMT = 12; W_CHART = 10; GAP = "  "
 
     h_line = (
         f"{' '*W_NUM}{GAP}"
